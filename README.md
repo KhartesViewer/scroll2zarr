@@ -131,7 +131,7 @@ instance, is a valid
 OME-Zarr provides a way to store multi-resolution data: that is,
 multiple copies of the same data volume, 
 sampled at different resolutions.
-`scroll-to-ome` by default creates volumes at 6 different
+`scroll_to_ome` by default creates volumes at 6 different
 resolutions (including the original full-resolution volume); 
 each volume has half the resolution of the previous one.
 Thus, with the default settings, the 6th volume has 1/32 the resolution
@@ -155,7 +155,7 @@ But in case you like tweaking things,
 what follows is a description of each option.
 
 * **chunk_size**: The size of the chunks that will be created.
-`scroll-to-ome` only creates cubical chunks, so if you choose,
+`scroll_to_ome` only creates cubical chunks, so if you choose,
 say, a chunk-size of 128, then the chunks will be 128x128x128
 in size.
 All resolutions in the multi-resolution data set will be
@@ -172,13 +172,13 @@ The default, 6, means that in addition to the full-resolution
 zarr store, 5 more will be created at successively lower
 resolutions.
 
-    `scroll-to-ome` always reduces the resolution by a factor
+    `scroll_to_ome` always reduces the resolution by a factor
     of 2 from one level to the next, along all 3 axes, so each level
     is approximately 8 times smaller in data volume than the previous
     level (approximately, because the chunks may not line up exactly
     with the data volume boundaries).
 
-* **max_gb**: By default, `scroll-to-ome` uses as much memory
+* **max_gb**: By default, `scroll_to_ome` uses as much memory
 as it needs to run efficiently; this is approximately chunk size times
 TIFF size.  So for instance, if each input TIFF file is 185 Mb, and
 the chunk size is 128, the program will need about 24 Gb of RAM
@@ -194,13 +194,13 @@ to run efficiently.
 full-resolution zarr data store should be created, rather than
 an OME-Zarr multi-resolution set of zarr stores.
 
-* **overwrite**: By default, `scroll-to-ome` will not overwrite
+* **overwrite**: By default, `scroll_to_ome` will not overwrite
 an existing zarr data store.  Setting this flag allows overwriting;
 use it with care!
 
 * **algorithm**: There exist a number of algoithms for down-sampling
 the data from one resolution level to the next.  By default,
-`scroll-to-ome` takes the mean of the 8 higher-resolution voxels that 
+`scroll_to_ome` takes the mean of the 8 higher-resolution voxels that 
 will be combined into 1 lower-resolution voxel.  
 
     A second
@@ -250,7 +250,7 @@ You may also need to set **nlevels** to a different value.
 ## OME-Zarr conversion: Time and space
 
 In general, the multi-resolution data store created by
-`scroll-to-ome` takes up about 20% more space than the original
+`scroll_to_ome` takes up about 20% more space than the original
 TIFF files.  That is, if the scroll TIFF files occupy 1 Tb,
 then the OME-Zarr data store will occupy about 1.2 Tb.
 
