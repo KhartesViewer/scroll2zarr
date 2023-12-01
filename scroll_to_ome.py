@@ -238,12 +238,12 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, slices=None, maxgb=None):
     for itiff in itiffs:
         z = itiff-z0
         tiffname = inttiffs[itiff]
-        print("reading",itiff)
+        print("reading",itiff, end='\r')
         tarr = tifffile.imread(tiffname)
         # tzarr[itiff,:,:] = tarr
         ny, nx = tarr.shape
         if nx != nx0 or ny != ny0:
-            print("File %s is the wrong shape (%d, %d); expected %d, %d"%(tiffname,nx,ny,nx0,ny0))
+            print("\nFile %s is the wrong shape (%d, %d); expected %d, %d"%(tiffname,nx,ny,nx0,ny0))
             continue
         if xslice is not None and yslice is not None:
             tarr = tarr[yslice, xslice]
@@ -252,16 +252,18 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, slices=None, maxgb=None):
         if cur_zc != prev_zc:
             if prev_zc >= 0:
                 zs = prev_zc*chunk_size+prev_zb*bufnz
-                print("writing (zc)", zs, zs+bufnz)
-                tzarr[zs:zs+bufnz,:,:] = buf
+                ze = zs+bufnz
+                ze = min(cur_zc*chunk_size, ze)
+                print("\nwriting (zc)", zs, ze)
+                tzarr[zs:z,:,:] = buf[:ze-zs,:,:]
                 buf[:,:,:] = 0
             prev_zc = cur_zc
             prev_zb = -1
         elif cur_zb != prev_zb:
             if prev_zb >= 0:
                 zs = cur_zc*chunk_size+prev_zb*bufnz
-                zend = min(zs+bufnz, chunk_size)
-                print("writing (zb)", zs, zend)
+                zend = min(zs+bufnz, (cur_zc+1)*chunk_size)
+                print("\nwriting (zb)", zs, zend)
                 tzarr[zs:zend,:,:] = buf
                 buf[:,:,:] = 0
             prev_zb = cur_zb
@@ -272,8 +274,11 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, slices=None, maxgb=None):
         zs = prev_zc*chunk_size
         if prev_zb > 0:
             zs += prev_zb*bufnz
-        print("writing (end)", zs, zs+bufnz)
-        tzarr[zs:zs+bufnz,:,:] = buf[0:(1+cur_bufz)]
+        ze = zs+bufnz
+        ze = min(itiffs[-1]+1, ze)
+        print("\nwriting (end)", zs, ze)
+        # tzarr[zs:zs+bufnz,:,:] = buf[0:(1+cur_bufz)]
+        tzarr[zs:ze,:,:] = buf[:ze-zs,:,:]
 
 def divp1(s, c):
     n = s // c
@@ -292,7 +297,8 @@ def resize(zarrdir, old_level, algorithm="mean"):
     
     idata = zarr.open(idir, mode="r")
     
-    print(idata.chunks, idata.shape)
+    # print(idata.chunks, idata.shape)
+    print("Creating level",old_level+1,"  input array shape", idata.shape)
     
     # order is z,y,x
     
@@ -324,7 +330,7 @@ def resize(zarrdir, old_level, algorithm="mean"):
     print("nzyx", nz,ny,nx)
     ibuf = np.zeros((2*cz,2*cy,2*cx), dtype=idata.dtype)
     for z in range(nz):
-        print("z", z)
+        print("z", z+1, "of", nz, end='\r')
         for y in range(ny):
             for x in range(nx):
                 ibuf = idata[
@@ -340,7 +346,7 @@ def resize(zarrdir, old_level, algorithm="mean"):
                     ibuf = np.pad(ibuf, 
                                   ((0,pad[0]),(0,pad[1]),(0,pad[2])), 
                                   mode="symmetric")
-                    print("padded",ibs,"to",ibuf.shape)
+                    print("padded",ibs,"to",ibuf.shape, end='\r')
                 # algorithms:
                 if algorithm == "nearest":
                     obuf = ibuf[::2, ::2, ::2]
@@ -356,10 +362,11 @@ def resize(zarrdir, old_level, algorithm="mean"):
                     err = "algorithm %s not valid"%algorithm
                     print(err)
                     return err
-                print(np.max(obuf), x, y, z)
+                # print(np.max(obuf), x, y, z)
                 odata[ z*cz:(z*cz+cz),
                        y*cy:(y*cy+cy),
                        x*cx:(x*cx+cx)] = np.round(obuf)
+    print()
 
 
 def main():
@@ -438,8 +445,15 @@ def main():
             return 1
     
     print("slices", slices)
+
+    # even if overwrite flag is False, overwriting is permitted
+    # when the user has set first_new_level
+    if not overwrite and first_new_level is None:
+        if zarrdir.exists():
+            print("Error: Directory",zarrdir,"already exists")
+            return(1)
     
-    if overwrite and (first_new_level is None or zarr_only):
+    if first_new_level is None or zarr_only:
         if zarrdir.exists():
             print("removing", zarrdir)
             shutil.rmtree(zarrdir)
@@ -464,6 +478,7 @@ def main():
         return 1
     
     if first_new_level is None:
+        print("Creating level 0")
         err = tifs2zarr(tiffdir, zarrdir/"0", chunk_size, slices=slices, maxgb=maxgb)
         if err is not None:
             print("error returned:", err)

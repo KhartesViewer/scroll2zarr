@@ -129,6 +129,7 @@ def get_ppm_data(ppmfl):
 def get_zarr_data(zdir, maxgb):
     z_uncached_data = zarr.open(zdir, "r")
     zdata = zarr.open(KhartesLRUCache(z_uncached_data.store, max_size=maxgb*2**30), mode="r")
+    # TODO: detect if zdata is a group instead of an array
     print("zdata", zdata.shape, zdata.dtype)
     return zdata
 
@@ -212,7 +213,7 @@ def process_block(block, step, ppm_data, zdata, nranges, out_volumes, i):
     u1 = min(u+step, xyzs.shape[1])
     v1 = min(v+step, xyzs.shape[0])
     if i%100 == 0:
-        print(i, z, u, u1, v, v1)
+        print("block", i, "avg z", z, " u range", u, u1, " v range", v, v1, "        ", end='\r')
     lxyzs = xyzs[v:v1,u:u1,:]
     lnormals = normals[v:v1,u:u1,:]
     lvalid = normals_valid[v:v1,u:u1]
