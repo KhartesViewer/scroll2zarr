@@ -137,6 +137,11 @@ def slice_step_is_1(s):
         return True
     return False
 
+def slice_start(s):
+    if s.start is None:
+        return 0
+    return s.start
+
 def slice_count(s, maxx):
     mn = s.start
     if mn is None:
@@ -208,11 +213,16 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, slices=None, maxgb=None):
 
     cx = nx0
     cy = ny0
+    x0 = 0
+    y0 = 0
     if xslice is not None:
         cx = slice_count(xslice, nx0)
+        x0 = slice_start(xslice)
     if yslice is not None:
         cy = slice_count(yslice, ny0)
+        y0 = slice_start(yslice)
     print("cx,cy,cz",cx,cy,cz)
+    print("x0,y0,z0",x0,y0,z0)
     
     store = zarr.NestedDirectoryStore(zarrdir)
     tzarr = zarr.open(
@@ -225,60 +235,70 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, slices=None, maxgb=None):
             compressor=None,
             mode='w', 
             )
-    
-    # allow buf that is smaller than chunk size
-    bufnz = chunk_size
+
+    # nb of chunks in y direction that fit inside of max_gb
+    chy = cy // chunk_size + 1
     if maxgb is not None:
-        mxz = int((maxgb*10**9)/(cx*cy*dt0.itemsize))
-        bufnz = min(bufnz, mxz)
-    buf = np.zeros((bufnz, cy, cx), dtype=dt0)
-    prev_zc = -1
-    prev_zb = -1
-    cur_bufz = -1
-    for itiff in itiffs:
-        z = itiff-z0
-        tiffname = inttiffs[itiff]
-        print("reading",itiff, end='\r')
-        tarr = tifffile.imread(tiffname)
-        # tzarr[itiff,:,:] = tarr
-        ny, nx = tarr.shape
-        if nx != nx0 or ny != ny0:
-            print("\nFile %s is the wrong shape (%d, %d); expected %d, %d"%(tiffname,nx,ny,nx0,ny0))
-            continue
-        if xslice is not None and yslice is not None:
-            tarr = tarr[yslice, xslice]
-        cur_zc = z // chunk_size
-        cur_zb = (z-cur_zc*chunk_size) // bufnz
-        if cur_zc != prev_zc:
-            if prev_zc >= 0:
-                zs = prev_zc*chunk_size+prev_zb*bufnz
-                ze = zs+bufnz
-                ze = min(cur_zc*chunk_size, ze)
-                print("\nwriting (zc)", zs, ze)
-                tzarr[zs:z,:,:] = buf[:ze-zs,:,:]
-                buf[:,:,:] = 0
-            prev_zc = cur_zc
-            prev_zb = -1
-        elif cur_zb != prev_zb:
-            if prev_zb >= 0:
-                zs = cur_zc*chunk_size+prev_zb*bufnz
-                zend = min(zs+bufnz, (cur_zc+1)*chunk_size)
-                print("\nwriting (zb)", zs, zend)
-                tzarr[zs:zend,:,:] = buf
-                buf[:,:,:] = 0
-            prev_zb = cur_zb
-        cur_bufz = z-cur_zc*chunk_size-cur_zb*bufnz
-        buf[cur_bufz,:,:] = tarr
-    
-    if prev_zc >= 0:
-        zs = prev_zc*chunk_size
-        if prev_zb > 0:
-            zs += prev_zb*bufnz
-        ze = zs+bufnz
-        ze = min(itiffs[-1]+1, ze)
-        print("\nwriting (end)", zs, ze)
-        # tzarr[zs:zs+bufnz,:,:] = buf[0:(1+cur_bufz)]
-        tzarr[zs:ze,:,:] = buf[:ze-zs,:,:]
+        maxy = int((maxgb*10**9)/(cx*chunk_size*dt0.itemsize))
+        chy = maxy // chunk_size
+        chy = max(1, chy)
+
+    # nb of y chunk groups
+    ncgy = cy // (chunk_size*chy) + 1
+    print("chy, ncgy", chy, ncgy)
+    buf = np.zeros((chunk_size, min(cy, chy*chunk_size), cx), dtype=dt0)
+    for icy in range(ncgy):
+        ys = icy*chy*chunk_size
+        ye = ys+chy*chunk_size
+        ye = min(ye, cy)
+        if ye == ys:
+            break
+        prev_zc = -1
+        for itiff in itiffs:
+            z = itiff-z0
+            tiffname = inttiffs[itiff]
+            print("reading",itiff,"     ", end='\r')
+            # print("reading",itiff)
+            tarr = tifffile.imread(tiffname)
+            print("done reading",itiff, end='\r')
+            # tzarr[itiff,:,:] = tarr
+            ny, nx = tarr.shape
+            if nx != nx0 or ny != ny0:
+                print("\nFile %s is the wrong shape (%d, %d); expected %d, %d"%(tiffname,nx,ny,nx0,ny0))
+                continue
+            if xslice is not None and yslice is not None:
+                tarr = tarr[yslice, xslice]
+            cur_zc = z // chunk_size
+            if cur_zc != prev_zc:
+                if prev_zc >= 0:
+                    zs = prev_zc*chunk_size
+                    ze = zs+chunk_size
+                    if ncgy == 1:
+                        print("\nwriting, z range %d,%d"%(zs+z0, ze+z0))
+                    else:
+                        print("\nwriting, z range %d,%d  y range %d,%d"%(zs+z0, ze+z0, ys+y0, ye+y0))
+                    tzarr[zs:z,ys:ye,:] = buf[:ze-zs,:ye-ys,:]
+                    buf[:,:,:] = 0
+                prev_zc = cur_zc
+            cur_bufz = z-cur_zc*chunk_size
+            # print("cur_bufzk,ye,ys", cur_bufz,ye,ys)
+            buf[cur_bufz,:ye-ys,:] = tarr[ys:ye,:]
+        
+        if prev_zc >= 0:
+            zs = prev_zc*chunk_size
+            ze = zs+chunk_size
+            ze = min(itiffs[-1]+1-z0, ze)
+            if ze > zs:
+                if ncgy == 1:
+                    print("\nwriting, z range %d,%d"%(zs+z0, ze+z0))
+                else:
+                    print("\nwriting, z range %d,%d  y range %d,%d"%(zs+z0, ze+z0, ys+y0, ye+y0))
+                # print("\nwriting (end)", zs, ze)
+                # tzarr[zs:zs+bufnz,:,:] = buf[0:(1+cur_bufz)]
+                tzarr[zs:ze,ys:ye,:] = buf[:ze-zs,:ye-ys,:]
+            else:
+                print("\n(end)")
+        buf[:,:,:] = 0
 
 def divp1(s, c):
     n = s // c
