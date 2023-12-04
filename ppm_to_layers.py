@@ -128,6 +128,12 @@ def get_ppm_data(ppmfl):
 
 def get_zarr_data(zdir, maxgb):
     z_uncached_data = zarr.open(zdir, "r")
+    if not hasattr(z_uncached_data, "shape"):
+        print(zdir,"is not a valid zarr store")
+        print("Perhaps it is an OME-Zarr store?")
+        zdir = zdir / '0'
+        print("Trying",zdir)
+        z_uncached_data = zarr.open(zdir, "r")
     zdata = zarr.open(KhartesLRUCache(z_uncached_data.store, max_size=maxgb*2**30), mode="r")
     # TODO: detect if zdata is a group instead of an array
     print("zdata", zdata.shape, zdata.dtype)
@@ -263,12 +269,13 @@ def write_volumes(ofl, sfl, volumes):
 
     for i in range(volume.shape[0]):
         fname = "%02d.tif"%i
-        print(fname)
+        print(fname, end='\r')
         tifffile.imwrite(ofl/fname, volume[i,:,:])
     # write stack file last in case there is some problem
     # creating it
     if sfl is not None and stack_arr is not None:
         tifffile.imwrite(sfl.with_suffix(".tif"), stack_arr)
+    print()
 
 def create_flattened_layers(params, create_stack):
     ppmfl, zdir, step, maxgb, layer_half_width, stack_half_width = params
@@ -288,7 +295,7 @@ def create_flattened_layers(params, create_stack):
         #     break
         process_block(block, step, ppmdata, zdata, nranges, output_volumes, i)
     prev = zdata.store.prev
-    print("misses", len(prev.values()), sum([v>1 for v in prev.values()]))
+    print("\nmisses", len(prev.values()), sum([v>1 for v in prev.values()]))
     return output_volumes
 
 def main():

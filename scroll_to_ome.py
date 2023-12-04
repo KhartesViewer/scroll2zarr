@@ -260,7 +260,7 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, slices=None, maxgb=None):
             print("reading",itiff,"     ", end='\r')
             # print("reading",itiff)
             tarr = tifffile.imread(tiffname)
-            print("done reading",itiff, end='\r')
+            # print("done reading",itiff, end='\r')
             # tzarr[itiff,:,:] = tarr
             ny, nx = tarr.shape
             if nx != nx0 or ny != ny0:
@@ -446,6 +446,8 @@ def main():
         return 1
     
     tiffdir = Path(args.input_tiff_dir)
+    if not tiffdir.exists():
+        print("Input TIFF directory",tiffdir,"does not exist")
     chunk_size = args.chunk_size
     nlevels = args.nlevels
     maxgb = args.max_gb
