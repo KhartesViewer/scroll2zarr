@@ -3,14 +3,16 @@
 ### What is OME-Zarr?
 
 Zarr is a file format that facilitates efficient access
-to huge data sets stored in zarr data volumes.
+to huge data sets, by sub-dividing the data into what
+in zarr are called "chunks".
 
 The zarr format also specifies how to store hierarchical sets
 ("groups") of
 zarr data volumes, and it supports metadata files.
 
 OME-Zarr is a layer on top of zarr that
-allows multi-resolution data volumes to be stored and accessed in 
+allows multi-resolution data volumes in zarr format
+to be stored and accessed in 
 a standardized way.
 OME-Zarr does this by 
 specifying a convention for structuring the zarr groups and
@@ -41,7 +43,7 @@ This includes
 the 500x500x500 grid files, created by @spelufo (same Discord server)
 that are available in each scroll's `volume_grid` directory
 on the scrollprize.org data server.
-As a result, users can now
+As a result, khartes users can now
 navigate through an entire scroll volume, instead
 of having to create a limited-size khartes data volume
 in advance.
@@ -53,7 +55,7 @@ A next step will be to allow khartes
 to access zarr data stores directly, and eventually to
 take advantage of OME-Zarr multi-resolution data stores.
 
-### What is in this repository?
+### What scripts are in this repository?
 
 In order for khartes to eventually work with multi-resolution
 scroll data in
@@ -80,6 +82,8 @@ an OME-Zarr data store from a scroll's TIFF files.
 * Not-very-detailed instructions on how to run `ppm_to_layers`
 * A beginner's guide to setting up Neuroglancer to view the 
 OME-Zarr files created by `scroll_to_ome`
+* A discussion of compressed TIFF files, including those in
+the `masked_volumes` directory
 
 ## Installation
 
@@ -113,15 +117,15 @@ python scroll_to_ome.py /mnt/vesuvius/Scroll1.volpkg/volumes/20230205180739 /mnt
 
 There are a number of options that modify the
 default behavior, but before I list
-them, I need to give you a little
-more background on zarr and OME-Zarr.
+them, you need to have a little
+more background information on zarr and OME-Zarr.
 
 In the zarr data format, the data volume is
 decomposed into 'chunks', which are 3D rectangles of data.
 Zarr provides many ways to store these chunks,
 but for the case we are interested in,
 each chunk is stored in a separate file;
-these files provide rapid access to data anywhere in the volume.
+these files thus provide rapid access to data anywhere in the volume.
 All chunks are the same size.
 A typical chunk size is 128x128x128
 voxels, but chunks can be non-cubical; 137x67x12, for
@@ -140,12 +144,16 @@ in the size of the data volume, reducing a 1 Tb data volume
 to 33 Mb.
 
 One interesting feature of zarr is that if a chunk contains
-only zeros, the file containing the chunk is not created at all.
-This is not very helpful in the case of the original scroll files,
+only zeros, the file containing that chunk is not created at all.
+This is not of much significance in the case of the original scroll files,
+which have almost no zeros,
 but @james darby (on the Discord server) has created a 
 "masked" version of Scroll 1, where all the
 pixels outside of the actual scroll are set to zero.  This saves
 a lot of space in the OME-Zarr data store.
+
+So now you know a little bit more about how zarr and OME-Zarr
+works, enough to be able to run `scroll_to_ome`.
 
 If you type `python scroll_to_ome.py --help` you will see all of the
 options that are available.  The options default to reasonable values,
@@ -184,10 +192,12 @@ TIFF size.  So for instance, if each input TIFF file is 185 Mb, and
 the chunk size is 128, the program will need about 24 Gb of RAM
 to run efficiently.
 
-    If your computer is not able to provide this much memory, or
+    If your computer is not able to provide as much memory
+    as needed, or if
     page faults slow your computer down, you can specify the 
     maximum memory size (in Gb) that should be used.  Setting this
-    means that the zarr files will need to be written repeatedly, which
+    means that the TIFF files will need to be read repeatedly
+    in order to conserve memory, which
     will slow down the conversion process significantly.
 
 * **zarr_only**: This is a flag indicating that only a single
@@ -206,7 +216,7 @@ will be combined into 1 lower-resolution voxel.
     A second
     option is 'nearest', which simply selects the value
     of one of the high-resolution voxels and assigns it to the 
-    lower-resolution one.  
+    lower-resolution one.
     This tends to create rather jittery looking
     images.
 
@@ -217,23 +227,32 @@ will be combined into 1 lower-resolution voxel.
     case, the calculations significantly slow down the conversion
     process.
 
-* **ranges**: This option is useful if you only want
-to extract a certain range of data from the TIFF files.
+* **ranges**: This option allows you to limit the xyz range
+of the TIFF data that will be converted.
 One reason you might want to do this is to test your parameters
 before committing yourself to a long conversion run.
-The format along each axis is similar to the python "slice" format: 
-`min:max`, where the extracted data covers the range min, min+1, min+2, ...,
-max-3, max-2, max-1.  Recall that the x and y axes correspond to
-the x and y axes in a single TIFF file, and z corresponds to the
-number of the TIFF file.
+Ranges are given for the three axes, with commas separating
+the three ranges.
+
+    For example, `1000:2000,1500:4000,2000:7000`
+
+    The order is x,y,z
+    where the x and y axes correspond to
+    the x and y axes in a single TIFF file, and z corresponds to the
+    number of the TIFF file.
+    The format describing the range along each axis is
+    similar to the python "slice" format: 
+    `min:max`, where the extracted data covers the range min, min+1, min+2, ...,
+    max-3, max-2, max-1.  
 
     As with the slice format, you can omit part of the range,
     so that `:5` is the same as `0:5`, `5:` is the same as 5 to the end,
     and `:` is the same as the entire range.  This last example is
-    useful when you only want to limit some of the ranges, for instance
-    `:,:,:1000` will use the full xy extent of the first 1000 TIFF files.
+    useful when you only want to limit the ranges
+    on some of the axes, for instance
+    `:,:,:1000` will take the full xy extent of the first 1000 TIFF files.
 
-    The slice format permits a third parameter, the step size,
+    The python slice format permits a third parameter, the step size,
     but `slice-to-ome` only allows a step size of 1.
 
 * **first_new_level**: This option allows you to go back to an
@@ -274,8 +293,9 @@ do not perform well on scroll data.  That is why `scroll_to_ome`
 does not compress the data that is stored in the zarr data volumes.
 However, one method that works well,
 on certain data sets, is that the zarr library
-can be set not to create chunks
-that are full of zeros.  That is, when writing chunks, if the zarr
+can be set to not create chunks
+that consist entirely of zeros.
+That is, when writing chunks, if the zarr
 library
 detects that the chunk consists of all zeros, then that chunk
 is simply not written to disk.
@@ -290,9 +310,13 @@ scroll itself have been set to zero.  These modified TIFFs are
 smaller than the original TIFFs, since a compression scheme
 has been used to hide the zeros.  So a zarr data store created from
 the masked_volumes TIFFs will not be any smaller than the
-masked_volumes directory itself.  However, it will be significantly
+`masked_volumes` directory itself.  However, it will be significantly
 smaller than a zarr data store created from the original non-masked
 TIFFs, with no loss of information inside the scroll itself.
+
+(The very last section of this README file contains some
+further information on dealing with compressed TIFF files,
+and `masked_volumes` files in particular).
 
 Another note: the `max_gb`
 flag may be useful on machines with limited RAM,
@@ -320,20 +344,21 @@ This means that
 multi-resolution OME-Zarr data stores,
 as well
 as single high-resolution zarr data stores,
-are located in directories that by convention end with a `.zarr`
+are both located in directories that by convention end with a `.zarr`
 suffix.
 One way to see whether a `.zarr` directory contains a single
 data volume, or a set of multi-resolution data volumes, is
 to go into the directory.
 
-If you see a file named `.zarray`,
+If inside the directory you see a file named `.zarray`,
 then that directory contains a single data volume.
 
-If you see files name `.zattrs` and `.zgroup`, then the
+If you see files named `.zattrs` and `.zgroup`, then the
 directory probably contains OME-Zarr data.
 
-To find the high-resolution zarr data volume in an OME-Zarr
-directory, go into that directory and look for the sub-directory
+If you have an OME-Zarr directory, but all you want
+is the high-resolution zarr data volume,
+go into the OME-Zarr directory and look for the sub-directory
 named `0`.  Although the name of the `0` directory does not
 end in the conventional `.zarr`, it is in fact a zarr data store,
 containing the high-resolution zarr data.
@@ -398,16 +423,16 @@ not so large that it wastes memory.  In limited
 experiments, the default size
 (8 Gb) has met these criteria.
 
-## A beginner's guide to using Neuroglancer to view OME-Zarr data
+## Viewing OME-Zarr data with Neuroglancer: A beginner's guide
 
 Neuroglancer (https://github.com/google/neuroglancer) is a
 browser-based application for viewing 
 volumetric data.
-It is hosted under Google's github account, but it is not
+Although it is hosted under Google's github account, it is not
 an official Google product.
 
 Neuroglancer is able to browse OME-Zarr data stores, taking
-advantage of the multi-resolution data they contain.  
+advantage of the multi-resolution data contain there.  
 
 In this section, I will show you how to set up Neuroglancer
 to browse an OME-Zarr data store on your computer.
@@ -420,23 +445,25 @@ Fortunately, these two servers are pretty easy to set up.
 1. Build and start Neuroglancer.
     1. Download or clone Neuroglancer from github: 
 https://github.com/google/neuroglancer
-    2. Follow the instructions in the Building section
+    2. `cd` into the `neuroglancer` directory.
+    3. Follow the instructions in the Building section
 of the Neuroglancer README file.  If your experience 
 is like mine, after you type `npm i`, you will at one point
 see some dire security warnings flash by.  To me this suggests
 that you might not want to expose your local Neuroglancer server to
 the public internet.
-    3. When you start the local server (`npm run dev-server`), you
-should be sure that you are still in the neuroglancer directory.
-    4. You should now be able to use a browser on your local machine
+    4.  Start the local server (`npm run dev-server`), checking
+first to make
+sure that you are still in the `neuroglancer` directory.
+    5. You should now be able to use a browser on your local machine
 to access Neuroglancer on http://localhost:8080
 
 2. Start a data server.
-    1. In a different terminal window, go to the directory that you
+    1. In a different terminal window, `cd` to the directory that you
 want to serve data from.  This might be the directory that
 contains your OME-Zarr `.zarr` directory.
     2. Use python to run the script called `cors_webserver.py`, which
-is in the neuroglancer directory.  This is to avoid problems
+is in the `neuroglancer` directory.  This is to avoid problems
 with CORS (https://en.wikipedia.org/wiki/Cross-origin_resource_sharing),
 which you would probably be happier not knowing anything about.
     3. By default, the data server is now making data available
@@ -448,7 +475,7 @@ select `zarr2://` (Zarr v2 data source).
 This will put `zarr2://` into the Source line on the top right.
     2. From the new list on the right,
 select `http://`  The Source line will now show `zarr2://http://`
-    3. Now you will type directly in the source line.  Just after
+    3. Now you will type directly into the source line.  Just after
 the current contents, type `localhost:9000/` (don't forget the
 trailing slash!) so the source line should show:
 `zarr2://http://localhost:9000/`
@@ -463,21 +490,57 @@ still in the Source window, hit Enter.
     7. If all goes well, Neuroglancer should now
 show you some information about your data volume.  Almost there!
     8. At the bottom of the information, there should be a yellow
-bar that reads: `Create as **image** layer`.  Click this.
-    9. Your data should now begin showing up in the Neurglancer
+bar that reads: `Create as image layer`.  Click this.
+    9. Your data should now begin showing up in the Neuroglancer
 window.  Happy exploring!
     10. If the data did not show up, go to the window where you
 started your data server, and look for clues...
 
 So that is how to use Neuroglancer to view your data.
 
+Noate that if you are running on Windows, you might want
+to monitor whether your anti-virus real-time check is slowing
+the connection between your data server and the browser.
+
 One thing to keep in mind, if your data volumes are located
 on a password-protected web server, is that Neuroglancer is
-not programmed to work with http password protection, 
-so you cannot
+not set up to work with http password protection, 
+so you cannot use it to
 directly view password-protected data.  In this case, you will
 need to run, on your local machine, a proxy server which
 downloads data from the password-protected server
-as needed.  Then point Neuroglancer to your local proxy server.
+as needed.  
+Then point Neuroglancer to this local proxy server.
 And if you figure out how to make a proxy server,
 please submit a Pull Request!
+
+## Compressed TIFFs and the `masked_volumes` directory
+
+As mentioned earlier, the OME-Zarr data stores will take up
+much less space if they are made from "masked" TIFF files, where
+the pixels outside of the scroll itself have been set to zero.
+For some scrolls, such TIFF files have been been created, and
+have been put in a directory
+called `masked_volumes`, which is parallel to the `volumes`
+directory where the original TIFFs are stored.
+
+There is a pitfall that you should be aware of, however, when
+using the masked TIFFs in `masked_volumes`: the effect of compression
+on read speed.
+
+Because these TIFFs are compressed, they are slower to read.  The
+slowdown depends on the read speed of the disk, and on the speed
+of the CPU, but on my computer, with an external SSD, reading
+a compressed file is 5 times slower than reading an uncompressed
+file.
+
+This means that if you are thinking of reading the compressed 
+masked TIFF files
+more than once (for instance, if you will be running `scroll_to_ome`
+with several different chunk sizes), and if you have sufficient
+storage space, you should consider decompressing the compressed
+`masked_volumes` TIFF files.  (**Important note**: the TIFF files
+in `volumes` are not compressed, so this discussion does not apply
+to them).
+
+A script `decompress_tiffs.py` is provided for this purpose.
