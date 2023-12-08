@@ -116,6 +116,9 @@ def get_params():
 # xyzs, normals, normals_valid
 def get_ppm_data(ppmfl):
     ppm = Ppm.loadPpm(ppmfl)
+    if not ppm.valid:
+        print("Error:", ppm.error)
+        return
     ppm.loadData()
     xyzs = ppm.ijks.astype(np.float32)
     print("xyzs", xyzs.shape, xyzs.dtype)
@@ -368,6 +371,8 @@ def main():
     create_stack = sfpath is not None
 
     volumes = create_flattened_layers(params, create_stack)
+    if volumes is None:
+        return
     write_volumes(odirpath, sfpath, volumes)
 
 if __name__ == '__main__':
