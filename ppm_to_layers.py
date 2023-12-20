@@ -1,7 +1,9 @@
 import sys
+import os
 import math
 import argparse
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import zarr
 import tifffile
@@ -76,42 +78,10 @@ class KhartesLRUCache(zarr.storage.LRUStoreCache):
 
         return value
 
-'''
-def get_output_paths():
-    ofl = Path(r'D:\Vesuvius\Projects\ppmtest\layers128ta')
-    sfl = Path(r'D:\Vesuvius\Projects\ppmtest\layers128ta.tif')
-    # ofl = Path(r'D:\Vesuvius\Projects\ppmtest\layers64')
-    # ofl = Path(r"D:\Vesuvius\Projects\Bigseg\layers128t100")
-    return ofl, sfl
-'''
-
 def create_output_dir(path):
     if not path.exists():
         path.mkdir()
     return True
-
-'''
-# ppmfl, zdir, step, maxgb, layer_half_width, stack_half_width
-def get_params():
-    step = 100
-    # step = 200
-
-    maxgb = 8 # after 6200; count 3950
-    maxgb = 20 # None; count 3950, 0
-    maxgb = 10 # after 6200; count 3950, 648
-    maxgb = 15 # None; count 3950, 0
-    maxgb = 5 # after 6200; count 3950, 648 but after switching u,v: None!
-
-    ppmfl = Path(r'D:\Vesuvius\Projects\ppmtest\1846.ppm')
-    # ppmfl = Path(r"D:\Vesuvius\Projects\Bigseg\20231022170900.ppm")
-    # zdir = Path(r'H:\Vesuvius\zarr_tests\scroll1m.zarr\0')
-    zdir = Path(r'D:\Vesuvius\scroll1_128.zarr\0')
-    # zdir = Path(r'D:\Vesuvius\scroll1_64.zarr\0')
-
-    layer_half_width = 32
-    stack_half_width = 12
-    return ppmfl, zdir, step, maxgb, layer_half_width, stack_half_width
-'''
 
 # xyzs, normals, normals_valid
 def get_ppm_data(ppmfl):
@@ -222,7 +192,8 @@ def process_block(block, step, ppm_data, zdata, nranges, out_volumes, i):
     u1 = min(u+step, xyzs.shape[1])
     v1 = min(v+step, xyzs.shape[0])
     if i%100 == 0:
-        print("block", i, "avg z", z, " u range", u, u1, " v range", v, v1, "        ", end='\r')
+        # print("block", i, "avg z", z, " u range", u, u1, " v range", v, v1, "        ", end='\r')
+        print("block", i, "avg z", z, " u range", u, u1, " v range", v, v1, "        ")
     lxyzs = xyzs[v:v1,u:u1,:]
     lnormals = normals[v:v1,u:u1,:]
     lvalid = normals_valid[v:v1,u:u1]
@@ -301,16 +272,37 @@ def create_flattened_layers(params, create_stack):
     print("\nmisses", len(prev.values()), sum([v>1 for v in prev.values()]))
     return output_volumes
 
-def main():
-    '''
-    odirpath, sfpath = get_output_paths()
-    # Do this early to make sure directory can be created
-
-    # ppmfl, zdir, step, maxgb, layer_half_width, stack_half_width
-    params = get_params()
-    if params is None:
+def create_flattened_layers_threaded(params, create_stack):
+    ppmfl, zdir, step, maxgb, layer_half_width, stack_half_width = params
+    # xyzs, normals, valid_normals
+    ppmdata = get_ppm_data(ppmfl)
+    if ppmdata is None:
         return
-    '''
+    zdata = get_zarr_data(zdir, maxgb)
+    if zdata is None:
+        return
+    nranges = get_nranges(layer_half_width, stack_half_width)
+    output_volumes = create_output_volumes(ppmdata, nranges, create_stack)
+    sorted_blocks = create_sorted_blocks(ppmdata, step)
+    ncpus = os.cpu_count()
+    print(ncpus, "cpus")
+    nset = 100
+    j = 0
+    while j < len(sorted_blocks):
+        print("j",j)
+        with ThreadPoolExecutor(2*ncpus) as executor:
+            for i in range(j,j+nset):
+                if i >= len(sorted_blocks):
+                    break
+                block = sorted_blocks[i]
+                executor.submit(process_block, block, step, ppmdata, zdata, nranges, output_volumes, i)
+        j += nset
+
+    prev = zdata.store.prev
+    print("\nmisses", len(prev.values()), sum([v>1 for v in prev.values()]))
+    return output_volumes
+
+def main():
     parser = argparse.ArgumentParser(
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
             description="Create flattened layers (tifs) given a ppm file and a zarr data store")
@@ -370,7 +362,8 @@ def main():
 
     create_stack = sfpath is not None
 
-    volumes = create_flattened_layers(params, create_stack)
+    # volumes = create_flattened_layers(params, create_stack)
+    volumes = create_flattened_layers_threaded(params, create_stack)
     if volumes is None:
         return
     write_volumes(odirpath, sfpath, volumes)
