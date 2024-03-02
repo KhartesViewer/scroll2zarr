@@ -96,8 +96,17 @@ Only a few packages need to be installed in order to run
 When these packages are installed, other required packages, such
 as numpy, will automatically be brought in, so they are not 
 explicitly listed here.
-The file `anaconda_installation.txt` lists the conda commands
+The file `anaconda_installation.yml` lists the conda commands
 that will import these packages, if you are using anaconda.
+
+To install with conda (anaconda), execute these commands,
+replacing yourEnvName with a name for the conda environment you like
+`conda env create -n yourEnvName -f environment.yml`
+`conda activate yourEnvName`
+
+You can also use pip to install the requirements with
+`pip install -r requirements.txt`
+ideally also in a conda environment you have already created
 
 ## User guide for `scroll_to_ome`
 
