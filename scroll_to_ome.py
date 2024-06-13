@@ -448,6 +448,8 @@ def main():
     tiffdir = Path(args.input_tiff_dir)
     if not tiffdir.exists():
         print("Input TIFF directory",tiffdir,"does not exist")
+        return 1
+
     chunk_size = args.chunk_size
     nlevels = args.nlevels
     maxgb = args.max_gb
