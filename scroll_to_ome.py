@@ -486,7 +486,8 @@ def main():
         err = tifs2zarr(tiffdir, zarrdir, chunk_size, slices=slices, maxgb=maxgb)
         if err is not None:
             print("error returned:", err)
-        return 1
+            return 1
+        return
     
     if first_new_level is None:
         err = create_ome_dir(zarrdir)
