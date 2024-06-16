@@ -446,7 +446,7 @@ def main():
         return 1
     
     tiffdir = Path(args.input_tiff_dir)
-    if not tiffdir.exists():
+    if not tiffdir.exists() and args.first_new_level is None:
         print("Input TIFF directory",tiffdir,"does not exist")
         return 1
 
