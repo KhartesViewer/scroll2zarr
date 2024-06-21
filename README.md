@@ -92,6 +92,7 @@ Only a few packages need to be installed in order to run
 * zarr
 * tifffile
 * scikit-image
+* tqdm
 
 When these packages are installed, other required packages, such
 as numpy, will automatically be brought in, so they are not 

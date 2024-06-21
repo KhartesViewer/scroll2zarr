@@ -9,6 +9,9 @@ import numpy as np
 import tifffile
 import zarr
 import skimage.transform
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import cpu_count
 
 '''
 # tiffdir = Path(r"C:\Vesuvius\scroll 1 2000-2030")
@@ -58,9 +61,6 @@ def parseSlices(istr):
                 iparts.append(None)
             slices.append(slice(iparts[0], iparts[1], iparts[2]))
     return slices
-
-# for each level (1 and beyond):
-# resize(zarrdir, old level, resize algo)
 
 # return None if succeeds, err string if fails
 def create_ome_dir(zarrdir):
@@ -255,34 +255,37 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, slices=None, maxgb=None):
             break
         prev_zc = -1
         for itiff in itiffs:
-            z = itiff-z0
-            tiffname = inttiffs[itiff]
-            print("reading",itiff,"     ", end='\r')
-            # print("reading",itiff)
-            tarr = tifffile.imread(tiffname)
-            # print("done reading",itiff, end='\r')
-            # tzarr[itiff,:,:] = tarr
-            ny, nx = tarr.shape
-            if nx != nx0 or ny != ny0:
-                print("\nFile %s is the wrong shape (%d, %d); expected %d, %d"%(tiffname,nx,ny,nx0,ny0))
-                continue
-            if xslice is not None and yslice is not None:
-                tarr = tarr[yslice, xslice]
-            cur_zc = z // chunk_size
-            if cur_zc != prev_zc:
-                if prev_zc >= 0:
-                    zs = prev_zc*chunk_size
-                    ze = zs+chunk_size
-                    if ncgy == 1:
-                        print("\nwriting, z range %d,%d"%(zs+z0, ze+z0))
-                    else:
-                        print("\nwriting, z range %d,%d  y range %d,%d"%(zs+z0, ze+z0, ys+y0, ye+y0))
-                    tzarr[zs:z,ys:ye,:] = buf[:ze-zs,:ye-ys,:]
-                    buf[:,:,:] = 0
-                prev_zc = cur_zc
-            cur_bufz = z-cur_zc*chunk_size
-            # print("cur_bufzk,ye,ys", cur_bufz,ye,ys)
-            buf[cur_bufz,:ye-ys,:] = tarr[ys:ye,:]
+            try:
+                z = itiff-z0
+                tiffname = inttiffs[itiff]
+                print("reading",itiff,"     ", end='\r')
+                # print("reading",itiff)
+                tarr = tifffile.imread(tiffname)
+                # print("done reading",itiff, end='\r')
+                # tzarr[itiff,:,:] = tarr
+                ny, nx = tarr.shape
+                if nx != nx0 or ny != ny0:
+                    print("\nFile %s is the wrong shape (%d, %d); expected %d, %d"%(tiffname,nx,ny,nx0,ny0))
+                    continue
+                if xslice is not None and yslice is not None:
+                    tarr = tarr[yslice, xslice]
+                cur_zc = z // chunk_size
+                if cur_zc != prev_zc:
+                    if prev_zc >= 0:
+                        zs = prev_zc*chunk_size
+                        ze = zs+chunk_size
+                        if ncgy == 1:
+                            print("\nwriting, z range %d,%d"%(zs+z0, ze+z0))
+                        else:
+                            print("\nwriting, z range %d,%d  y range %d,%d"%(zs+z0, ze+z0, ys+y0, ye+y0))
+                        tzarr[zs:z,ys:ye,:] = buf[:ze-zs,:ye-ys,:]
+                        buf[:,:,:] = 0
+                    prev_zc = cur_zc
+                cur_bufz = z-cur_zc*chunk_size
+                # print("cur_bufzk,ye,ys", cur_bufz,ye,ys)
+                buf[cur_bufz,:ye-ys,:] = tarr[ys:ye,:]
+            except Exception as e:
+                print("\nError reading",tiffname,":",e)
         
         if prev_zc >= 0:
             zs = prev_zc*chunk_size
@@ -306,30 +309,49 @@ def divp1(s, c):
         n += 1
     return n
 
-def resize(zarrdir, old_level, algorithm="mean"):
+def process_chunk(args):
+    idata, odata, z, y, x, cz, cy, cx, algorithm = args
+    ibuf = idata[2*z*cz:(2*z*cz+2*cz),
+                 2*y*cy:(2*y*cy+2*cy),
+                 2*x*cx:(2*x*cx+2*cx)]
+    if np.max(ibuf) == 0:
+        return  # Skip if the block is empty to save computation
+
+    # pad ibuf to even in all directions
+    ibs = ibuf.shape
+    pad = (ibs[0]%2, ibs[1]%2, ibs[2]%2)
+    if any(pad):
+        ibuf = np.pad(ibuf, 
+                      ((0,pad[0]),(0,pad[1]),(0,pad[2])), 
+                      mode="symmetric")
+
+    # algorithms:
+    if algorithm == "nearest":
+        obuf = ibuf[::2, ::2, ::2]
+    elif algorithm == "gaussian":
+        obuf = np.round(skimage.transform.rescale(ibuf, .5, preserve_range=True))
+    elif algorithm == "mean":
+        obuf = np.round(skimage.transform.downscale_local_mean(ibuf, (2,2,2)))
+    else:
+        raise ValueError(f"algorithm {algorithm} not valid")
+
+    odata[z*cz:(z*cz+cz),
+          y*cy:(y*cy+cy),
+          x*cx:(x*cx+cx)] = np.round(obuf)
+
+def resize(zarrdir, old_level, num_threads, algorithm="mean"):
     idir = zarrdir / ("%d"%old_level)
     if not idir.exists():
-        err = "input directory %s does not exist" % idir
+        err = f"input directory {idir} does not exist"
         print(err)
-        return(err)
+        return err
+    
     odir = zarrdir / ("%d"%(old_level+1))
-    # print(zarrdir, idir, odir)
-    
     idata = zarr.open(idir, mode="r")
-    
-    # print(idata.chunks, idata.shape)
-    print("Creating level",old_level+1,"  input array shape", idata.shape)
-    
-    # order is z,y,x
-    
-    cz = idata.chunks[0]
-    cy = idata.chunks[1]
-    cx = idata.chunks[2]
-    
-    sz = idata.shape[0]
-    sy = idata.shape[1]
-    sx = idata.shape[2]
-    
+    print("Creating level",old_level+1,"  input array shape", idata.shape, " algorithm", algorithm)
+
+    cz, cy, cx = idata.chunks
+    sz, sy, sx = idata.shape
     store = zarr.NestedDirectoryStore(odir)
     odata = zarr.open(
             store=store,
@@ -341,53 +363,17 @@ def resize(zarrdir, old_level, algorithm="mean"):
             compressor=None,
             mode='w',
             )
-    
-    # 2*chunk size because we want number of blocks after rescale
-    nz = divp1(sz, 2*cz)
-    ny = divp1(sy, 2*cy)
-    nx = divp1(sx, 2*cx)
-    
-    print("nzyx", nz,ny,nx)
-    ibuf = np.zeros((2*cz,2*cy,2*cx), dtype=idata.dtype)
-    for z in range(nz):
-        print("z", z+1, "of", nz, end='\r')
-        for y in range(ny):
-            for x in range(nx):
-                ibuf = idata[
-                        2*z*cz:(2*z*cz+2*cz),
-                        2*y*cy:(2*y*cy+2*cy),
-                        2*x*cx:(2*x*cx+2*cx)]
-                if np.max(ibuf) == 0:
-                    continue
-                # pad ibuf to even in all directions
-                ibs = ibuf.shape
-                pad = (ibs[0]%2, ibs[1]%2, ibs[2]%2)
-                if any(pad):
-                    ibuf = np.pad(ibuf, 
-                                  ((0,pad[0]),(0,pad[1]),(0,pad[2])), 
-                                  mode="symmetric")
-                    print("padded",ibs,"to",ibuf.shape, end='\r')
-                # algorithms:
-                if algorithm == "nearest":
-                    obuf = ibuf[::2, ::2, ::2]
-                elif algorithm == "gaussian":
-                    obuf = np.round(
-                        skimage.transform.rescale(
-                            ibuf, .5, preserve_range=True))
-                elif algorithm == "mean":
-                    obuf = np.round(
-                        skimage.transform.downscale_local_mean(
-                            ibuf, (2,2,2)))
-                else:
-                    err = "algorithm %s not valid"%algorithm
-                    print(err)
-                    return err
-                # print(np.max(obuf), x, y, z)
-                odata[ z*cz:(z*cz+cz),
-                       y*cy:(y*cy+cy),
-                       x*cx:(x*cx+cx)] = np.round(obuf)
-    print()
 
+    # Prepare tasks
+    tasks = [(idata, odata, z, y, x, cz, cy, cx, algorithm) for z in range(divp1(sz, 2*cz))
+                                                             for y in range(divp1(sy, 2*cy))
+                                                             for x in range(divp1(sx, 2*cx))]
+
+    # Use ThreadPoolExecutor to process blocks in parallel
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        list(tqdm(executor.map(process_chunk, tasks), total=len(tasks)))
+
+    print("Processing complete")
 
 def main():
     # parser = argparse.ArgumentParser()
@@ -425,6 +411,11 @@ def main():
             # default=False,
             help="Overwrite the output directory, if it already exists")
     parser.add_argument(
+            "--num_threads", 
+            type=int, 
+            default=cpu_count(), 
+            help="Advanced: Number of threads to use for processing. Default is number of CPUs")
+    parser.add_argument(
             "--algorithm",
             choices=['mean', 'gaussian', 'nearest'],
             default="mean",
@@ -453,6 +444,7 @@ def main():
     maxgb = args.max_gb
     zarr_only = args.zarr_only
     overwrite = args.overwrite
+    num_threads = args.num_threads
     algorithm = args.algorithm
     print("overwrite", overwrite)
     first_new_level = args.first_new_level
@@ -511,7 +503,7 @@ def main():
     if first_new_level is not None:
         existing_level = first_new_level-1
     for l in range(existing_level, nlevels-1):
-        err = resize(zarrdir, l, algorithm)
+        err = resize(zarrdir, l, num_threads, algorithm)
         if err is not None:
             print("error returned:", err)
             return 1
