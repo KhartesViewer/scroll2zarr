@@ -206,7 +206,12 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, slices=None, maxgb=None):
     maxz = itiffs[-1]
     cz = maxz-z0+1
     
-    tiff0 = tifffile.imread(inttiffs[minz])
+    try:
+        tiff0 = tifffile.imread(inttiffs[minz])
+    except Exception as e:
+        err = "Error reading %s: %s"%(inttiffs[minz],e)
+        print(err)
+        return err
     ny0, nx0 = tiff0.shape
     dt0 = tiff0.dtype
     print("tiff size", nx0, ny0, "z range", minz, maxz)
@@ -255,37 +260,39 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, slices=None, maxgb=None):
             break
         prev_zc = -1
         for itiff in itiffs:
+            z = itiff-z0
+            tiffname = inttiffs[itiff]
             try:
-                z = itiff-z0
-                tiffname = inttiffs[itiff]
                 print("reading",itiff,"     ", end='\r')
                 # print("reading",itiff)
                 tarr = tifffile.imread(tiffname)
-                # print("done reading",itiff, end='\r')
-                # tzarr[itiff,:,:] = tarr
-                ny, nx = tarr.shape
-                if nx != nx0 or ny != ny0:
-                    print("\nFile %s is the wrong shape (%d, %d); expected %d, %d"%(tiffname,nx,ny,nx0,ny0))
-                    continue
-                if xslice is not None and yslice is not None:
-                    tarr = tarr[yslice, xslice]
-                cur_zc = z // chunk_size
-                if cur_zc != prev_zc:
-                    if prev_zc >= 0:
-                        zs = prev_zc*chunk_size
-                        ze = zs+chunk_size
-                        if ncgy == 1:
-                            print("\nwriting, z range %d,%d"%(zs+z0, ze+z0))
-                        else:
-                            print("\nwriting, z range %d,%d  y range %d,%d"%(zs+z0, ze+z0, ys+y0, ye+y0))
-                        tzarr[zs:z,ys:ye,:] = buf[:ze-zs,:ye-ys,:]
-                        buf[:,:,:] = 0
-                    prev_zc = cur_zc
-                cur_bufz = z-cur_zc*chunk_size
-                # print("cur_bufzk,ye,ys", cur_bufz,ye,ys)
-                buf[cur_bufz,:ye-ys,:] = tarr[ys:ye,:]
             except Exception as e:
                 print("\nError reading",tiffname,":",e)
+                # If reading fails (file missing or deformed)
+                tarr = np.zeros((ny, nx), dtype=dt0)
+            # print("done reading",itiff, end='\r')
+            # tzarr[itiff,:,:] = tarr
+            ny, nx = tarr.shape
+            if nx != nx0 or ny != ny0:
+                print("\nFile %s is the wrong shape (%d, %d); expected %d, %d"%(tiffname,nx,ny,nx0,ny0))
+                continue
+            if xslice is not None and yslice is not None:
+                tarr = tarr[yslice, xslice]
+            cur_zc = z // chunk_size
+            if cur_zc != prev_zc:
+                if prev_zc >= 0:
+                    zs = prev_zc*chunk_size
+                    ze = zs+chunk_size
+                    if ncgy == 1:
+                        print("\nwriting, z range %d,%d"%(zs+z0, ze+z0))
+                    else:
+                        print("\nwriting, z range %d,%d  y range %d,%d"%(zs+z0, ze+z0, ys+y0, ye+y0))
+                    tzarr[zs:z,ys:ye,:] = buf[:ze-zs,:ye-ys,:]
+                    buf[:,:,:] = 0
+                prev_zc = cur_zc
+            cur_bufz = z-cur_zc*chunk_size
+            # print("cur_bufzk,ye,ys", cur_bufz,ye,ys)
+            buf[cur_bufz,:ye-ys,:] = tarr[ys:ye,:]
         
         if prev_zc >= 0:
             zs = prev_zc*chunk_size
