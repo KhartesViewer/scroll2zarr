@@ -8,6 +8,7 @@ import copy
 import numpy as np
 import tifffile
 import zarr
+from numcodecs.registry import codec_registry
 import skimage.transform
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
@@ -41,6 +42,20 @@ first_new_level = 0
 # quit if dir already exists
 
 # tifs2zarr(tiffdir, zarrdir+"/0", chunk_size, range(optional))
+
+def parseCorner(istr):
+    sstrs = istr.split(",")
+    if len(sstrs) != 3:
+        print("Could not parse corner argument '%s'; expected 3 comma-separated numbers"%istr)
+        return None
+    corner = []
+    for sstr in sstrs:
+        i = int(sstr)
+        if i<3:
+            print("corner coordinates must be non-negative")
+            return None
+        corner.append(i)
+    return corner
 
 def parseSlices(istr):
     sstrs = istr.split(",")
@@ -152,6 +167,89 @@ def slice_count(s, maxx):
         mx = maxx
     mx = min(mx, maxx)
     return mx-mn
+
+def divp1(s, c):
+    n = s // c
+    if s%c > 0:
+        n += 1
+    return n
+
+# compression is None or a string.  None means use the
+# compression of the input zarr, a string of "none" or "" means 
+# no compression; otherwise the string gives the name of the compression
+# scheme.
+# If chunk_size is None, the input zarr's chunking is used, otherwise
+# chunks of (chunk_size, chunk_size, chunk_size) are used.
+# If dtype is None, the input zarr's dtype is used.  Otherwise the
+# given dtype is used.  Note that the only supported conversion
+# is from uint16 to uint8.
+def zarr2zarr(izarrdir, ozarrdir, corner=(0,0,0), chunk_size=None, compression=None, dtype=None):
+    # user gives corner as x,y,z, but internally
+    # we use z,y,x
+    corner = (corner[2], corner[1], corner[0])
+    izarr = zarr.open(izarrdir, mode="r")
+    store = izarr.store
+    chunk_sizes = izarr.chunks
+    if chunk_size is not None:
+        chunk_sizes = (chunk_size, chunk_size, chunk_size)
+    divisor = 1
+    if dtype is None:
+        dtype = izarr.dtype
+    elif dtype != izarr.dtype:
+        if dtype == np.uint8 and izarr.dtype == np.uint16:
+            divisor = 256
+        else:
+            print("Can't convert",izarr.dtype,"to",dtype)
+            return
+
+    compressor = izarr.compressor
+    if compression is not None:
+        if compression == "none" or compression == "":
+            compressor = None
+        else:
+            codec_cls = codec_registry[compression]
+            compressor = codec_cls()
+            # if compression_opts is dict:
+            # compressor = codec_cls(**compression_opts)
+    czarr = zarr.LRUStoreCache(store, max_size=2**32)
+    ishape = izarr.shape
+    oshape = [corner[i]+ishape[i] for i in range(3)]
+    nchunks = [divp1(oshape[i], chunk_sizes[i]) for i in range(3)]
+
+    store = zarr.NestedDirectoryStore(ozarrdir)
+    ozarr = zarr.open(
+            store=store, 
+            shape=oshape, 
+            chunks=chunk_sizes,
+            dtype = dtype,
+            write_empty_chunks=False,
+            fill_value=0,
+            compressor=compressor,
+            mode='w', 
+            )
+
+    chunk0s = [corner[i] // chunk_sizes[i] for i in range(3)]
+    print("chunk_sizes", chunk_sizes)
+    # print("chunk0s", chunk0s)
+    # print("nchunks", nchunks)
+    ci = [0,0,0]
+    for ci[0] in range(chunk0s[0], nchunks[0]):
+        print("doing", ci[0], "of", nchunks[0])
+        for ci[1] in range(chunk0s[1], nchunks[1]):
+            for ci[2] in range(chunk0s[2], nchunks[2]):
+                o0 = [chunk_sizes[i]*ci[i] for i in range(3)]
+                o1 = [o0[i]+chunk_sizes[i] for i in range(3)]
+                i0 = [o0[i]-corner[i] for i in range(3)]
+                s0 = [max(0,-i0[i]) for i in range(3)]
+                o0 = [o0[i]+s0[i] for i in range(3)]
+                i0 = [o0[i]-corner[i] for i in range(3)]
+                i1 = [o1[i]-corner[i] for i in range(3)]
+                # print("o0", o0)
+                # print("o1", o1)
+                # print("i0", i0)
+                # print("i1", i1)
+                ozarr[o0[0]:o1[0], o0[1]:o1[1], o0[2]:o1[2]] = izarr[i0[0]:i1[0], i0[1]:i1[1], i0[2]:i1[2]] // divisor
+
 
 def tifs2zarr(tiffdir, zarrdir, chunk_size, obytes=0, slices=None, maxgb=None):
     if slices is None:
@@ -322,12 +420,6 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, obytes=0, slices=None, maxgb=None):
                 print("\n(end)")
         buf[:,:,:] = 0
 
-def divp1(s, c):
-    n = s // c
-    if s%c > 0:
-        n += 1
-    return n
-
 def process_chunk(args):
     idata, odata, z, y, x, cz, cy, cx, algorithm = args
     ibuf = idata[2*z*cz:(2*z*cz+2*cz),
@@ -379,7 +471,7 @@ def resize(zarrdir, old_level, num_threads, algorithm="mean"):
             dtype=idata.dtype,
             write_empty_chunks=False,
             fill_value=0,
-            compressor=None,
+            compressor=idata.compressor,
             mode='w',
             )
 
@@ -398,41 +490,21 @@ def main():
     # parser = argparse.ArgumentParser()
     parser = argparse.ArgumentParser(
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-            description="Create OME/Zarr data store from a set of TIFF files")
+            description="Create OME/Zarr data store from an existing zarr data store")
     parser.add_argument(
-            "input_tiff_dir", 
-            help="Directory containing tiff files")
+            "input_zarr_dir", 
+            help="Name of zarr store directory")
     parser.add_argument(
             "output_zarr_ome_dir", 
             help="Name of directory that will contain OME/zarr datastore")
-    parser.add_argument(
-            "--chunk_size", 
-            type=int, 
-            default=128, 
-            help="Size of chunk")
-    parser.add_argument(
-            "--obytes",
-            type=int,
-            default=0,
-            help="number of bytes per pixel in output")
     parser.add_argument(
             "--nlevels", 
             type=int, 
             default=6, 
             help="Number of subdivision levels to create, including level 0")
     parser.add_argument(
-            "--max_gb", 
-            type=float, 
-            default=None, 
-            help="Maximum amount of memory (in Gbytes) to use; None means no limit")
-    parser.add_argument(
-            "--zarr_only", 
-            action="store_true", 
-            help="Create a simple Zarr data store instead of an OME/Zarr hierarchy")
-    parser.add_argument(
             "--overwrite", 
             action="store_true", 
-            # default=False,
             help="Overwrite the output directory, if it already exists")
     parser.add_argument(
             "--num_threads", 
@@ -445,13 +517,20 @@ def main():
             default="mean",
             help="Advanced: algorithm used to sub-sample the data")
     parser.add_argument(
-            "--ranges", 
-            help="Advanced: output only a subset of the data.  Example (in xyz order): 2500:3000,1500:4000,500:600")
+            "--corner", 
+            help="Advanced: starting corner of input data set, relative to origin of output data set.  Example (in xyz order): 2000,3000,5500")
     parser.add_argument(
-            "--first_new_level", 
-            type=int, 
-            default=None, 
-            help="Advanced: If some subdivision levels already exist, create new levels, starting with this one")
+            "--chunk_size", 
+            type=int,
+            help="Size of chunk; if not given, will be same as input zarr")
+    parser.add_argument(
+            "--compression", 
+            help="Compression algorithm ('blosc', 'none', ...); if not given, will be same as input zarr; if set to 'none', no compression will be used")
+    parser.add_argument(
+            "--bytes",
+            type=int,
+            default=0,
+            help="number of bytes per pixel in output; if not given, will be same as input zarr")
 
     args = parser.parse_args()
     
@@ -460,76 +539,61 @@ def main():
         print("Name of ouput zarr directory must end with '.zarr'")
         return 1
     
-    tiffdir = Path(args.input_tiff_dir)
-    if not tiffdir.exists() and args.first_new_level is None:
-        print("Input TIFF directory",tiffdir,"does not exist")
+    tiffdir = Path(args.input_zarr_dir)
+    if not tiffdir.exists():
+        print("Input zarr directory",tiffdir,"does not exist")
         return 1
 
-    chunk_size = args.chunk_size
     nlevels = args.nlevels
-    maxgb = args.max_gb
-    zarr_only = args.zarr_only
     overwrite = args.overwrite
     num_threads = args.num_threads
     algorithm = args.algorithm
-    obytes = args.obytes
     print("overwrite", overwrite)
-    first_new_level = args.first_new_level
-    if first_new_level is not None and first_new_level < 1:
-        print("first_new_level must be at least 1")
-    
-    slices = None
-    if args.ranges is not None:
-        slices = parseSlices(args.ranges)
-        if slices is None:
-            print("Error parsing ranges argument")
-            return 1
-    
-    print("slices", slices)
 
-    # even if overwrite flag is False, overwriting is permitted
-    # when the user has set first_new_level
-    if not overwrite and first_new_level is None:
+    corner = (0,0,0)
+    if args.corner is not None:
+        corner = parseCorner(args.corner)
+        if corner is None:
+            print("Error parsing corner argument")
+            return 1
+
+    chunk_size = args.chunk_size
+    compression = args.compression
+
+    dtype = None
+    if args.bytes == 1:
+        dtype = np.uint8
+    elif args.bytes == 2:
+        dtype = np.uint16
+    
+    if not overwrite:
         if zarrdir.exists():
             print("Error: Directory",zarrdir,"already exists")
             return(1)
     
-    if first_new_level is None or zarr_only:
-        if zarrdir.exists():
-            print("removing", zarrdir)
-            shutil.rmtree(zarrdir)
+    if zarrdir.exists():
+        print("removing", zarrdir)
+        shutil.rmtree(zarrdir)
     
-    # tifs2zarr(tiffdir, zarrdir, chunk_size, slices=slices, maxgb=maxgb)
-    
-    if zarr_only:
-        err = tifs2zarr(tiffdir, zarrdir, chunk_size, obytes=obytes, slices=slices, maxgb=maxgb)
-        if err is not None:
-            print("error returned:", err)
-            return 1
-        return
-    
-    if first_new_level is None:
-        err = create_ome_dir(zarrdir)
-        if err is not None:
-            print("error returned:", err)
-            return 1
+    err = create_ome_dir(zarrdir)
+    if err is not None:
+        print("error returned:", err)
+        return 1
     
     err = create_ome_headers(zarrdir, nlevels)
     if err is not None:
         print("error returned:", err)
         return 1
     
-    if first_new_level is None:
-        print("Creating level 0")
-        err = tifs2zarr(tiffdir, zarrdir/"0", chunk_size, obytes=obytes, slices=slices, maxgb=maxgb)
-        if err is not None:
-            print("error returned:", err)
-            return 1
+    print("Creating level 0")
+    print("corner", corner)
+    err = zarr2zarr(tiffdir, zarrdir/"0", corner=corner, chunk_size=chunk_size, compression=compression, dtype=dtype)
+    if err is not None:
+        print("error returned:", err)
+        return 1
     
     # for each level (1 and beyond):
     existing_level = 0
-    if first_new_level is not None:
-        existing_level = first_new_level-1
     for l in range(existing_level, nlevels-1):
         err = resize(zarrdir, l, num_threads, algorithm)
         if err is not None:
