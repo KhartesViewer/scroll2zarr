@@ -14,26 +14,76 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
 
-'''
-# tiffdir = Path(r"C:\Vesuvius\scroll 1 2000-2030")
-# zarrdir = Path(r"C:\Vesuvius\test.zarr")
-# tiffdir = Path(r"H:\Vesuvius\Scroll1.volpkg\volumes_masked\20230205180739")
-# tiffdir = Path(r"H:\Vesuvius\zarr_tests\masked_subset")
-# zarrdir = Path(r"H:\Vesuvius\zarr_tests\testzo.zarr")
-# zarrdir = Path(r"H:\Vesuvius\testzc.zarr")
+class DecompressedLRUCache(zarr.storage.LRUStoreCache):
+    def __init__(self, store, max_size):
+        super().__init__(store, max_size)
+        self.compressor = None
 
-# tif files, ome dir
-# set chunk_size
-chunk_size = 128
-# slices = (None, None, slice(1975,2010))
-# slices = (slice(2000,2500), slice(2000,2512), slice(1975,2010))
-slices = (slice(2000,2500), slice(2000,2512), slice(1975,2005))
-maxgb = None
-nlevels = 6
-zarr_only = False
-first_new_level = 0
-# maxgb = .0036
-'''
+    # By default, the LRU cache holds chunks that it copies
+    # directly from the original data store.  This means that
+    # if the data store contains compressed chunks, the cache
+    # will hold compressed chunks.
+    # Each such chunk has to be decompressed every time it is
+    # accessed, which is a waste of CPU.
+    # This causes noticeable slowing.
+    # The routine below modifies the internals of the array
+    # that uses the LRU cache as the data store, so that compressed
+    # chunks are decompressed when they go into the cache, and
+    # so that they are not decompressed an additional time when
+    # they are accessed.
+    def transferCompressor(self, array):
+        self.compressor = array._compressor
+        array._compressor = None
+        
+    # This function gets a chunk from the underlying data
+    # store.  The access may cause an exception to be thrown.
+    # This function does not try to catch exceptions, because
+    # the caller of this function will handle them.
+    # If decompression has been transfered to the LRU cache
+    # (see the transferCompressor function), do the decompression
+    # here.
+    def getValue(self, key):
+        # print("getValue", key)
+        value = self._store[key]
+        # print("nv", type(value), len(value))
+        if len(value) > 0 and self.compressor is not None:
+            for i in range(3):
+                try:
+                    dc = self.compressor.decode(value)
+                    break
+                except Exception as e:
+                    print("decompression failure try %d: %s"%(i+1, e))
+            # print("dc", type(dc), len(dc))
+            return dc
+        # print("  found", key)
+        return value
+
+    # This is identical to __getitem__ in LRUStoreCache,
+    # except that the access to self._store is replaced
+    # by a call to self.getValue
+    def __getitem__(self, key):
+        try:
+            # first try to obtain the value from the cache
+            with self._mutex:
+                value = self._values_cache[key]
+                # cache hit if no KeyError is raised
+                self.hits += 1
+                # treat the end as most recently used
+                self._values_cache.move_to_end(key)
+
+        except KeyError:
+            # cache miss, retrieve value from the store
+            # value = self._store[key]
+            value = self.getValue(key)
+            with self._mutex:
+                self.misses += 1
+                # need to check if key is not in the cache, as it may have been cached
+                # while we were retrieving the value from the store
+                if key not in self._values_cache:
+                    self._cache_value(key, value)
+
+        return value
+
 
 # create ome dir, .zattrs, .zgroup
 # (don't need to know output array dimensions, just number of levels,
@@ -41,27 +91,25 @@ first_new_level = 0
 # create_ome_dir(zarrdir, nlevels)
 # quit if dir already exists
 
-# tifs2zarr(tiffdir, zarrdir+"/0", chunk_size, range(optional))
-
-def parseCorner(istr):
+def parseShift(istr):
     sstrs = istr.split(",")
     if len(sstrs) != 3:
-        print("Could not parse corner argument '%s'; expected 3 comma-separated numbers"%istr)
+        print("Could not parse shift argument '%s'; expected 3 comma-separated numbers"%istr)
         return None
-    corner = []
+    shift = []
     for sstr in sstrs:
         i = int(sstr)
         if i<3:
-            print("corner coordinates must be non-negative")
+            print("shift coordinates must be non-negative")
             return None
-        corner.append(i)
-    return corner
+        shift.append(i)
+    return shift
 
 def parseSlices(istr):
     sstrs = istr.split(",")
     if len(sstrs) != 3:
-        print("Could not parse ranges argument '%s'; expected 3 comma-separated ranges"%istr)
-        return None
+        print("Could not parse range argument '%s'; expected 3 comma-separated ranges"%istr)
+        return (None, None, None)
     slices = []
     for sstr in sstrs:
         if sstr == "":
@@ -76,6 +124,44 @@ def parseSlices(istr):
                 iparts.append(None)
             slices.append(slice(iparts[0], iparts[1], iparts[2]))
     return slices
+
+def slice_step_is_1(s):
+    if s is None:
+        return True
+    if s.step is None:
+        return True
+    if s.step == 1:
+        return True
+    return False
+
+def slice_start(s, default=0):
+    if s is None or s.start is None:
+        return default
+    return s.start
+
+def slice_stop(s, default=0):
+    if s is None or s.stop is None:
+        return default
+    return s.stop
+
+'''
+def slice_count(s, maxx):
+    mn = s.start
+    if mn is None:
+        mn = 0
+    mn = max(0, mn)
+    mx = s.stop
+    if mx is None:
+        mx = maxx
+    mx = min(mx, maxx)
+    return mx-mn
+'''
+
+def divp1(s, c):
+    n = s // c
+    if s%c > 0:
+        n += 1
+    return n
 
 # return None if succeeds, err string if fails
 def create_ome_dir(zarrdir):
@@ -143,37 +229,6 @@ def create_ome_headers(zarrdir, nlevels):
     json.dump(zgroup_dict, (zarrdir / ".zgroup").open("w"), indent=4)
     json.dump(zad, (zarrdir / ".zattrs").open("w"), indent=4)
 
-def slice_step_is_1(s):
-    if s is None:
-        return True
-    if s.step is None:
-        return True
-    if s.step == 1:
-        return True
-    return False
-
-def slice_start(s):
-    if s.start is None:
-        return 0
-    return s.start
-
-def slice_count(s, maxx):
-    mn = s.start
-    if mn is None:
-        mn = 0
-    mn = max(0, mn)
-    mx = s.stop
-    if mx is None:
-        mx = maxx
-    mx = min(mx, maxx)
-    return mx-mn
-
-def divp1(s, c):
-    n = s // c
-    if s%c > 0:
-        n += 1
-    return n
-
 # compression is None or a string.  None means use the
 # compression of the input zarr, a string of "none" or "" means 
 # no compression; otherwise the string gives the name of the compression
@@ -183,12 +238,21 @@ def divp1(s, c):
 # If dtype is None, the input zarr's dtype is used.  Otherwise the
 # given dtype is used.  Note that the only supported conversion
 # is from uint16 to uint8.
-def zarr2zarr(izarrdir, ozarrdir, corner=(0,0,0), chunk_size=None, compression=None, dtype=None):
-    # user gives corner as x,y,z, but internally
-    # we use z,y,x
-    corner = (corner[2], corner[1], corner[0])
+def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_size=None, compression=None, dtype=None):
+    # user gives shift and slices in x,y,z order, but internally
+    # we use z,y,x order
+    shift = (shift[2], shift[1], shift[0])
+    slices = (slices[2], slices[1], slices[0])
+    # TODO: slice_start >= 0 for all slices
+    if not all([(slice_start(s)>=0) for s in slices]):
+        err = "All window starting coordinates must be >= 0"
+        print(err)
+        return err
+    if not all([slice_step_is_1(s) for s in slices]):
+        err = "All window steps must be 1"
+        print(err)
+        return err
     izarr = zarr.open(izarrdir, mode="r")
-    store = izarr.store
     chunk_sizes = izarr.chunks
     if chunk_size is not None:
         chunk_sizes = (chunk_size, chunk_size, chunk_size)
@@ -199,8 +263,9 @@ def zarr2zarr(izarrdir, ozarrdir, corner=(0,0,0), chunk_size=None, compression=N
         if dtype == np.uint8 and izarr.dtype == np.uint16:
             divisor = 256
         else:
-            print("Can't convert",izarr.dtype,"to",dtype)
-            return
+            err = "Can't convert %s to %s"%(str(izarr.dtype), str(dtype))
+            print(err)
+            return err
 
     compressor = izarr.compressor
     if compression is not None:
@@ -211,10 +276,47 @@ def zarr2zarr(izarrdir, ozarrdir, corner=(0,0,0), chunk_size=None, compression=N
             compressor = codec_cls()
             # if compression_opts is dict:
             # compressor = codec_cls(**compression_opts)
-    czarr = zarr.LRUStoreCache(store, max_size=2**32)
+
+    # TODO: allow larger max_size
+    # TODO: store decompressed chunks in cache
+    store = izarr.store
+    # cstore = zarr.LRUStoreCache(store, max_size=2**32)
+    cstore = DecompressedLRUCache(store, max_size=2**32)
+    czarr = zarr.open(cstore, mode="r")
+    cstore.transferCompressor(czarr)
+    # czarr = izarr
     ishape = izarr.shape
-    oshape = [corner[i]+ishape[i] for i in range(3)]
-    nchunks = [divp1(oshape[i], chunk_sizes[i]) for i in range(3)]
+    # is0 and is1 are the min and max of the input zarr, shifted
+    # to the output zarr's grid
+    is0 = [shift[i] for i in range(3)]
+    is1 = [ishape[i]+shift[i] for i in range(3)]
+    # ozarr covers the range 0,0,0 to stop-point of given window 
+    # (or max of shifted izarr, if no window given)
+    oshape = [slice_stop(slices[i], is1[i]) for i in range(3)]
+    # os0 and os1 are the min and max of the region in
+    # ozarr that should be written to, based on the given
+    # window (if none given, use 0,0,0 and max of shifted izarr)
+    os0 = [slice_start(slices[i], 0) for i in range(3)]
+    # os1 = [slice_stop(slices[i], is1[i]) for i in range(3)]
+    os1 = [oshape[i] for i in range(3)]
+    if not all([(os1[i] > os0[i]) for i in range(3)]):
+        err = "Computed conflicting output grid min %s and max %s"%(str(os0), str(os1))
+        print(err)
+        return err
+    # cs0 and cs1 are the min and max of the part of the input grid
+    # that should be copied to the output grid, 
+    # in shifted (output-grid) coordinates
+    cs0 = [max(os0[i], is0[i]) for i in range(3)]
+    cs1 = [min(os1[i], is1[i]) for i in range(3)]
+    '''
+    # Note that the code below is wrong; we want the intersection
+    # between is0 to is1,  and 0,0,0 to oshape
+    cs0 = [max(slice_start(slices[i]), is0[i]) for i in range(3)]
+    # TODO: This won't work!!!
+    cs1 = [min(slice_stop(slices[i]),  is1[i]) for i in range(3)]
+    # TODO: make sure cs1 > 0
+    # oshape = [shift[i]+ishape[i] for i in range(3)]
+    '''
 
     store = zarr.NestedDirectoryStore(ozarrdir)
     ozarr = zarr.open(
@@ -228,197 +330,38 @@ def zarr2zarr(izarrdir, ozarrdir, corner=(0,0,0), chunk_size=None, compression=N
             mode='w', 
             )
 
-    chunk0s = [corner[i] // chunk_sizes[i] for i in range(3)]
+    # chunk0s = [shift[i] // chunk_sizes[i] for i in range(3)]
+    # nchunks = [divp1(oshape[i], chunk_sizes[i]) for i in range(3)]
+    chunk0s = [cs0[i] // chunk_sizes[i] for i in range(3)]
+    chunk1s = [cs1[i] // chunk_sizes[i] for i in range(3)]
     print("chunk_sizes", chunk_sizes)
     # print("chunk0s", chunk0s)
     # print("nchunks", nchunks)
     ci = [0,0,0]
-    for ci[0] in range(chunk0s[0], nchunks[0]):
-        print("doing", ci[0], "of", nchunks[0])
-        for ci[1] in range(chunk0s[1], nchunks[1]):
-            for ci[2] in range(chunk0s[2], nchunks[2]):
+    # for ci[0] in range(chunk0s[0], nchunks[0]):
+    for ci[0] in range(chunk0s[0], chunk1s[0]):
+        print("doing", ci[0], "to", chunk1s[0])
+        for ci[1] in range(chunk0s[1], chunk1s[1]):
+            for ci[2] in range(chunk0s[2], chunk1s[2]):
+                o0 = [max(cs0[i], chunk_sizes[i]*ci[i]) for i in range(3)]
+                o1 = [min(cs1[i], chunk_sizes[i]*(1+ci[i])) for i in range(3)]
+                i0 = [o0[i]-shift[i] for i in range(3)]
+                i1 = [o1[i]-shift[i] for i in range(3)]
+                '''
                 o0 = [chunk_sizes[i]*ci[i] for i in range(3)]
                 o1 = [o0[i]+chunk_sizes[i] for i in range(3)]
-                i0 = [o0[i]-corner[i] for i in range(3)]
+                i0 = [o0[i]-shift[i] for i in range(3)]
                 s0 = [max(0,-i0[i]) for i in range(3)]
                 o0 = [o0[i]+s0[i] for i in range(3)]
-                i0 = [o0[i]-corner[i] for i in range(3)]
-                i1 = [o1[i]-corner[i] for i in range(3)]
+                i0 = [o0[i]-shift[i] for i in range(3)]
+                i1 = [o1[i]-shift[i] for i in range(3)]
+                '''
                 # print("o0", o0)
                 # print("o1", o1)
                 # print("i0", i0)
                 # print("i1", i1)
-                ozarr[o0[0]:o1[0], o0[1]:o1[1], o0[2]:o1[2]] = izarr[i0[0]:i1[0], i0[1]:i1[1], i0[2]:i1[2]] // divisor
+                ozarr[o0[0]:o1[0], o0[1]:o1[1], o0[2]:o1[2]] = czarr[i0[0]:i1[0], i0[1]:i1[1], i0[2]:i1[2]] // divisor
 
-
-def tifs2zarr(tiffdir, zarrdir, chunk_size, obytes=0, slices=None, maxgb=None):
-    if slices is None:
-        xslice = yslice = zslice = None
-    else:
-        xslice, yslice, zslice = slices
-        if not all([slice_step_is_1(s) for s in slices]):
-            err = "All slice steps must be 1 in slices"
-            print(err)
-            return err
-    # Note this is a generator, not a list
-    tiffs = tiffdir.glob("*.tif")
-    rec = re.compile(r'([0-9]+)\.\w+$')
-    # rec = re.compile(r'[0-9]+$')
-    inttiffs = {}
-    for tiff in tiffs:
-        tname = tiff.name
-        match = rec.match(tname)
-        if match is None:
-            continue
-        # Look for last match (closest to end of file name)
-        # ds = match[-1]
-        ds = match.group(1)
-        itiff = int(ds)
-        if itiff in inttiffs:
-            err = "File %s: tiff id %d already used"%(tname,itiff)
-            print(err)
-            return err
-        inttiffs[itiff] = tiff
-    if len(inttiffs) == 0:
-        err = "No tiffs found"
-        print(err)
-        return err
-    
-    itiffs = list(inttiffs.keys())
-    itiffs.sort()
-    z0 = 0
-    if zslice is not None:
-        maxz = itiffs[-1]+1
-        valid_zs = range(maxz)[zslice]
-        itiffs = list(filter(lambda z: z in valid_zs, itiffs))
-        # z0 = itiffs[0]
-        if zslice.start is None:
-            z0 = 0
-        else:
-            z0 = zslice.start
-    
-    # for testing
-    # itiffs = itiffs[2048:2048+256]
-    
-    minz = itiffs[0]
-    maxz = itiffs[-1]
-    cz = maxz-z0+1
-    
-    try:
-        tiff0 = tifffile.imread(inttiffs[minz])
-    except Exception as e:
-        err = "Error reading %s: %s"%(inttiffs[minz],e)
-        print(err)
-        return err
-    ny0, nx0 = tiff0.shape
-    dt0 = tiff0.dtype
-    otype = tiff0.dtype
-    divisor = 1
-    if obytes == 1 and dt0 == np.uint16:
-        print("Converting from uint16 in input to uint8 in output")
-        otype = np.uint8
-        divisor = 256
-    elif obytes != 0 and dt0.itemsize != obytes:
-        err = "Cannot perform pixel conversion from %s to %d bytes"%(dt0, obytes)
-        print(err)
-        return err
-    else:
-        print("Byte conversion: none")
-    print("tiff size", nx0, ny0, "z range", minz, maxz)
-
-    cx = nx0
-    cy = ny0
-    x0 = 0
-    y0 = 0
-    if xslice is not None:
-        cx = slice_count(xslice, nx0)
-        x0 = slice_start(xslice)
-    if yslice is not None:
-        cy = slice_count(yslice, ny0)
-        y0 = slice_start(yslice)
-    print("cx,cy,cz",cx,cy,cz)
-    print("x0,y0,z0",x0,y0,z0)
-    
-    store = zarr.NestedDirectoryStore(zarrdir)
-    tzarr = zarr.open(
-            store=store, 
-            shape=(cz, cy, cx), 
-            chunks=(chunk_size, chunk_size, chunk_size),
-            dtype = otype,
-            write_empty_chunks=False,
-            fill_value=0,
-            compressor=None,
-            mode='w', 
-            )
-
-    # nb of chunks in y direction that fit inside of max_gb
-    chy = cy // chunk_size + 1
-    if maxgb is not None:
-        maxy = int((maxgb*10**9)/(cx*chunk_size*dt0.itemsize))
-        chy = maxy // chunk_size
-        chy = max(1, chy)
-
-    # nb of y chunk groups
-    ncgy = cy // (chunk_size*chy) + 1
-    print("chy, ncgy", chy, ncgy)
-    buf = np.zeros((chunk_size, min(cy, chy*chunk_size), cx), dtype=dt0)
-    for icy in range(ncgy):
-        ys = icy*chy*chunk_size
-        ye = ys+chy*chunk_size
-        ye = min(ye, cy)
-        if ye == ys:
-            break
-        prev_zc = -1
-        for itiff in itiffs:
-            z = itiff-z0
-            tiffname = inttiffs[itiff]
-            try:
-                print("reading",itiff,"     ", end='\r')
-                # print("reading",itiff)
-                tarr = tifffile.imread(tiffname)
-            except Exception as e:
-                print("\nError reading",tiffname,":",e)
-                # If reading fails (file missing or deformed)
-                tarr = np.zeros((ny, nx), dtype=dt0)
-            # print("done reading",itiff, end='\r')
-            # tzarr[itiff,:,:] = tarr
-            ny, nx = tarr.shape
-            if nx != nx0 or ny != ny0:
-                print("\nFile %s is the wrong shape (%d, %d); expected %d, %d"%(tiffname,nx,ny,nx0,ny0))
-                continue
-            if xslice is not None and yslice is not None:
-                tarr = tarr[yslice, xslice]
-            cur_zc = z // chunk_size
-            if cur_zc != prev_zc:
-                if prev_zc >= 0:
-                    zs = prev_zc*chunk_size
-                    ze = zs+chunk_size
-                    if ncgy == 1:
-                        print("\nwriting, z range %d,%d"%(zs+z0, ze+z0))
-                    else:
-                        print("\nwriting, z range %d,%d  y range %d,%d"%(zs+z0, ze+z0, ys+y0, ye+y0))
-                    tzarr[zs:z,ys:ye,:] = buf[:ze-zs,:ye-ys,:]
-                    buf[:,:,:] = 0
-                prev_zc = cur_zc
-            cur_bufz = z-cur_zc*chunk_size
-            # print("cur_bufzk,ye,ys", cur_bufz,ye,ys)
-            buf[cur_bufz,:ye-ys,:] = tarr[ys:ye,:] // divisor
-        
-        if prev_zc >= 0:
-            zs = prev_zc*chunk_size
-            ze = zs+chunk_size
-            ze = min(itiffs[-1]+1-z0, ze)
-            if ze > zs:
-                if ncgy == 1:
-                    print("\nwriting, z range %d,%d"%(zs+z0, ze+z0))
-                else:
-                    print("\nwriting, z range %d,%d  y range %d,%d"%(zs+z0, ze+z0, ys+y0, ye+y0))
-                # print("\nwriting (end)", zs, ze)
-                # tzarr[zs:zs+bufnz,:,:] = buf[0:(1+cur_bufz)]
-                tzarr[zs:ze,ys:ye,:] = buf[:ze-zs,:ye-ys,:] // divisor
-            else:
-                print("\n(end)")
-        buf[:,:,:] = 0
 
 def process_chunk(args):
     idata, odata, z, y, x, cz, cy, cx, algorithm = args
@@ -517,8 +460,12 @@ def main():
             default="mean",
             help="Advanced: algorithm used to sub-sample the data")
     parser.add_argument(
-            "--corner", 
-            help="Advanced: starting corner of input data set, relative to origin of output data set.  Example (in xyz order): 2000,3000,5500")
+            "--shift", 
+            help="Advanced: shift input data set, relative to output data set.  Example (in xyz order): 2000,3000,5500")
+    parser.add_argument(
+            "--window", 
+            help="Advanced: output only a subset of the data.  Example (in xyz order, and based on the output-data grid): 2500:3000,1500:4000,500:600")
+    
     parser.add_argument(
             "--chunk_size", 
             type=int,
@@ -534,14 +481,14 @@ def main():
 
     args = parser.parse_args()
     
-    zarrdir = Path(args.output_zarr_ome_dir)
-    if zarrdir.suffix != ".zarr":
+    ozarrdir = Path(args.output_zarr_ome_dir)
+    if ozarrdir.suffix != ".zarr":
         print("Name of ouput zarr directory must end with '.zarr'")
         return 1
     
-    tiffdir = Path(args.input_zarr_dir)
-    if not tiffdir.exists():
-        print("Input zarr directory",tiffdir,"does not exist")
+    izarrdir = Path(args.input_zarr_dir)
+    if not izarrdir.exists():
+        print("Input zarr directory",izarrdir,"does not exist")
         return 1
 
     nlevels = args.nlevels
@@ -550,12 +497,20 @@ def main():
     algorithm = args.algorithm
     print("overwrite", overwrite)
 
-    corner = (0,0,0)
-    if args.corner is not None:
-        corner = parseCorner(args.corner)
-        if corner is None:
-            print("Error parsing corner argument")
+    shift = (0,0,0)
+    if args.shift is not None:
+        shift = parseShift(args.shift)
+        if shift is None:
+            print("Error parsing shift argument")
             return 1
+    
+    slices = (None,None,None)
+    if args.window is not None:
+        slices = parseSlices(args.window)
+        if slices is None:
+            print("Error parsing window argument")
+            return 1
+    
 
     chunk_size = args.chunk_size
     compression = args.compression
@@ -567,27 +522,27 @@ def main():
         dtype = np.uint16
     
     if not overwrite:
-        if zarrdir.exists():
-            print("Error: Directory",zarrdir,"already exists")
+        if ozarrdir.exists():
+            print("Error: Directory",ozarrdir,"already exists")
             return(1)
     
-    if zarrdir.exists():
-        print("removing", zarrdir)
-        shutil.rmtree(zarrdir)
+    if ozarrdir.exists():
+        print("removing", ozarrdir)
+        shutil.rmtree(ozarrdir)
     
-    err = create_ome_dir(zarrdir)
+    err = create_ome_dir(ozarrdir)
     if err is not None:
         print("error returned:", err)
         return 1
     
-    err = create_ome_headers(zarrdir, nlevels)
+    err = create_ome_headers(ozarrdir, nlevels)
     if err is not None:
         print("error returned:", err)
         return 1
     
     print("Creating level 0")
-    print("corner", corner)
-    err = zarr2zarr(tiffdir, zarrdir/"0", corner=corner, chunk_size=chunk_size, compression=compression, dtype=dtype)
+    print("shift", shift, "slices", slices)
+    err = zarr2zarr(izarrdir, ozarrdir/"0", shift=shift, slices=slices, chunk_size=chunk_size, compression=compression, dtype=dtype)
     if err is not None:
         print("error returned:", err)
         return 1
@@ -595,7 +550,7 @@ def main():
     # for each level (1 and beyond):
     existing_level = 0
     for l in range(existing_level, nlevels-1):
-        err = resize(zarrdir, l, num_threads, algorithm)
+        err = resize(ozarrdir, l, num_threads, algorithm)
         if err is not None:
             print("error returned:", err)
             return 1
