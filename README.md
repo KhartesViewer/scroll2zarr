@@ -1,5 +1,10 @@
 # OME-Zarr tools for the Vesuvius scrolls
 
+### Authorship
+
+For a list of contributors to this repository,
+see the end of this document.
+
 ### What is OME-Zarr?
 
 Zarr is a file format that facilitates efficient access
@@ -855,3 +860,16 @@ in `volumes` are not compressed, so this discussion does not apply
 to them).
 
 A script `decompress_tiffs.py` is provided for this purpose.
+
+### Authorship
+
+The upstream version of the scroll2zarr repository is
+located at https://github.com/KhartesViewer/scroll2zarr .
+The contributors to this repository can be found using
+the usual git techniques.
+
+Various forks and copies of the upstream repository
+have been made; some have not kept the original attribution.
+Developers of forks and copies are encouraged to
+append their contributions to their
+copy of this README file.
