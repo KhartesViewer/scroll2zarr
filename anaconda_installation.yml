@@ -5,3 +5,7 @@ dependencies:
   - zarr
   - tifffile
   - scikit-image
+  - fsspec
+  - aiohttp
+  - requests
+  - tqdm

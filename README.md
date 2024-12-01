@@ -36,35 +36,27 @@ easily and efficiently through enormous data volumes.
 
 ### OME-Zarr and khartes
 
-Brett Olsen (active on the scrollprize.org Discord server)
-has recently added code that allows khartes to access TIFF files
-as if they were zarr data stores.
-This includes
-the 500x500x500 grid files, created by @spelufo (same Discord server)
-that are available in each scroll's `volume_grid` directory
-on the scrollprize.org data server.
-As a result, khartes users can now
-navigate through an entire scroll volume, instead
-of having to create a limited-size khartes data volume
-in advance.
-However, the data
-in this case is not multi-resolution, so navigating the data
-is not as efficient as with Neuroglancer.
-
-A next step will be to allow khartes
-to access zarr data stores directly, and eventually to
-take advantage of OME-Zarr multi-resolution data stores.
+Like Neuroglancer, khartes is able to navigate through
+multi-resolution OME-Zarr data stores.
 
 ### What scripts are in this repository?
 
-In order for khartes to eventually work with multi-resolution
+In order for khartes to work with multi-resolution
 scroll data in
 OME-Zarr format, there needs to be a way to convert the 
 existing scroll
-data to this format.  So the main script in this repository
-is `scroll_to_ome`, which performs this conversion.
+data, in tiff format to the OME-Zarr format.  
+One script in this repository,
+`scroll_to_ome`, performs this conversion.
 
-Another script, `ppm_to_layers`, reads a `.ppm` file and
+Another script, `zarr_to_ome`, takes a single-level
+(non-multi-resolution) zarr data volume and converts
+it to a multi-resolution OME-Zarr data store.  `zarr_to_ome`
+also provides other conversions, such as windowing and shifting
+the input data, converting the data from `uint16` to `uint8` format,
+changing the chunk size, and changing the compression used.
+
+A third script, `ppm_to_layers`, reads a `.ppm` file and
 zarr-format scroll data, and uses these to create a flattened
 layer volume that is as similar as possible to
 the one created by `vc_layers_from_ppm`.  This was written to
@@ -78,7 +70,13 @@ Here is what you will find in the rest of this README file.
 * A guide to installing the scripts. 
 * Detailed instructions on how to use `scroll_to_ome` to create
 an OME-Zarr data store from a scroll's TIFF files.
-* A further discussion of OME-Zarr.
+* A further discussion of the OME-Zarr format.
+* Detailed instructions on how to use `zarr_to_ome` to create
+an OME-Zarr data store from a single-level (non-multi-resolution)
+zarr data store, and how to use it to perform other operations
+on the input data, such as shifting, windowing, changing the
+chunk size, changing the number of bytes per pixel, and changing
+the compression used..
 * Not-very-detailed instructions on how to run `ppm_to_layers`
 * A beginner's guide to setting up Neuroglancer to view the 
 OME-Zarr files created by `scroll_to_ome`
@@ -102,7 +100,7 @@ that will import these packages, if you are using anaconda.
 
 To install with conda (anaconda), execute these commands,
 replacing yourEnvName with a name for the conda environment you like
-`conda env create -n yourEnvName -f environment.yml`
+`conda env create -n yourEnvName -f anaconda_installation.yml`
 `conda activate yourEnvName`
 
 You can also use pip to install the requirements with
@@ -372,6 +370,309 @@ go into the OME-Zarr directory and look for the sub-directory
 named `0`.  Although the name of the `0` directory does not
 end in the conventional `.zarr`, it is in fact a zarr data store,
 containing the high-resolution zarr data.
+
+## User guide for `zarr_to_ome`
+
+It is assumed in this section
+that you already have some understanding
+of the OME-Zarr data format. 
+If you encounter terms or concepts that you
+don't understand, you may wish to review
+the sections above.
+
+The script `zarr_to_ome` takes a single-level
+(non-multi-resolution) zarr data store and converts
+it to a multi-resolution OME-Zarr data store.  `Zarr_to_ome`
+also provides other conversions, such as windowing and shifting
+the input data, 
+converting the data from `uint16` to `uint8` format,
+changing the chunk size, and changing the compression used.
+`Zarr_to_ome` can also download and convert data from the 
+Vesuvius Challenge data server.
+
+`Zarr_to_ome` takes a number of arguments, but only two
+are mandatory: the name of the location of
+the input zarr data store,
+and the name of the directory where the OME-Zarr multi-resolution
+data will be written.  Note that `zarr_to_ome` will accept
+either a directory path or a URL to specify
+the location of the input data store.
+
+For example:
+```
+python zarr_to_ome.py /mnt/vesuvius/fibers.zarr /mnt/vesuvius/fibers_ome.zarr
+```
+If the input data store is a multi-resolution OME-Zarr data store
+rather than a single-resolution zarr store,
+the OME hierarchy's highest-resolution zarr data store will be used.
+
+If you type `python zarr_to_ome.py --help` you will see all of the
+options that are available.  The options default to reasonable values,
+so if you leave them all alone, you will,
+with one **important exception**, get a good result.
+
+The important exception is the **algorithm** option; you need
+to make sure to choose the down-sampling algorithm that is
+appropriate to your data.
+
+What follows is a description of each option.
+
+* **algorithm**: A number of algorithms are provided for down-sampling
+the data from each resolution level to the next.  By default,
+`scroll_to_ome` uses `mean`, which, as the name suggests,
+computes the arithmetic
+mean of the 8 higher-resolution voxels that 
+will be combined into a single lower-resolution voxel.  The 'mean'
+algorithm is appropriate for data sets where the voxel value
+represents something physical and continuous, such as
+x-ray opacity.
+
+    A second
+    option, `nearest`, simply selects the value
+    of one of the high-resolution voxels and assigns it to the 
+    lower-resolution one.  The `nearest` algorithm is appropriate
+    when the voxel values represent an indicator. 
+    Examples of indicators:
+
+    - The voxel value is 0 if the voxel does not contain ink,
+    and 1 if it does;
+    - The voxel value is 0 if it is not part of a fiber, 1 if
+    it is part of a horizontal fiber, and 2 if it is part of a vertical
+    fiber;
+    - The voxel value is an integer denoting which segment/sheet (if any)
+    the voxel belongs to.
+
+    What these have in common is that taking the arithmetic
+    mean of the 8 adjacent high-resolution voxels makes no sense; better
+    to arbitrarily choose one of them (and
+    even better would be some kind of
+    plurality-based algorithm, but that option is not provided).
+
+    **Conclusion**: choose the algorithm based on the type of
+    data you are converting.
+    The `zarr_to_ome` script is not
+    able to make this determination on its own, 
+    and the default (`mean`) may
+    not be suitable for your data set.
+
+* **chunk_size**: The size of the chunks that will be created.
+By default (that is, if the `--chunk-size` argument is not present), 
+the chunks in the output OME data store will be
+the same size as the chunks in the input zarr data store.
+However, if you want the OME data to have a different chunk
+size, you can set that size here.
+
+    Note that `zarr_to_ome` only creates cubical chunks, so if 
+    you choose,
+    say, a chunk size of 128, then the chunks will be 128x128x128
+    in size.
+    All resolutions in the multi-resolution data set will be
+    created with that same chunk size.
+
+* **shift**: This option allows you to shift the input
+zarr data in x, y, and z, before it is output.  
+This might be desirable,
+for instance, if the input zarr represents the results
+of a computation that was performed on a subset of
+the original, and you want to shift it back to its
+correct position in x,y,z.
+The shift parameter consists of three integers, 
+one per axis, with commas separating the three values.
+
+    For example, `1961,2135,7000`
+
+    In this example, the input data will be shifted by 
+    1961 in x, 2135 in y, and 7000 in z, before being written
+    to the OME-Zarr data store.
+
+    **Important note**: the command-line parser used by
+    `zarr_to_ome` gets confused by hyphens (minus signs).
+    To prevent confusion, specify the shift in this form:
+
+    `--shift=-12,-34,-567`
+
+    The alternative, `--shift -12,-34,-567` (space instead of
+    an equals sign) **will fail** if the first number starts
+    with a minus sign.
+
+* **window**: This option allows you to create a subset
+of the input data, 
+limiting the input data used to a given range in x, y, and z.
+
+    One reason you might want to do this is to test your parameters
+    before committing yourself to a long conversion run.
+    The window parameter consists of three ranges, one per axis,
+    with commas separating
+    the three ranges.
+
+    For example, `1000:2000,1500:4000,2000:7000`
+
+    The order is x,y,z, corresponding to the original scroll axes.
+    The format describing the range along each axis is
+    similar to the python "slice" format: 
+    `min:max`, where the extracted data covers the 
+    range min, min+1, min+2, ...,
+    max-3, max-2, max-1.  
+
+    As with the slice format, you can omit part of the range,
+    so that `:5` is the same as `0:5`, `5:` is the same as 5 to the end,
+    and `:` is the same as the entire range.  This last example is
+    useful when you only want to limit the ranges
+    on some of the axes, for instance
+    `:,:,:1000` will take the full xy extent of the first 1000 z slices.
+
+    The python slice format permits a third parameter, the step size,
+    but `zarr-to-ome` only allows a step size of 1.
+
+    Note that the **window**
+    ranges are based on the coordinates of the input data, not
+    the output data.  That is, **window** is applied 
+    before **shift**, if a shift is given.  
+    This is true whether `--shift` appears
+    before or after `--window` in the command line.
+
+* **bytes**: This option allows you to set
+the number of bytes per voxel in the output OME-Zarr data set.
+By default, the output data set will have the same number of bytes
+per voxel as the input data set.
+
+    If the input data set has voxels of type unsigned 16-bit integer,
+    and an output type of unsigned 8-bit integer is desired, then
+    use `--bytes 1`.  Other data types, and other conversions, are
+    not supported.
+
+* **compression**: This algorithm allows you to set the
+compression algorithm used on each chunk in the output data
+store.  It is assumed that the same algorithm will be used on
+all resolution levels of the OME-Zarr data.
+
+    The default is to use the same compression algorithm on output
+    that was used in the input zarr data store.
+
+    If no compression is desired on output, give the value `none`.
+    For BLOSC compression, give `blosc`.  At this time there is
+    no way to specify the optional parameters used by the BLOSC
+    algorithm; default parameters chosen by the zarr code are used.
+
+* **overwrite**: By default, `scroll_to_ome` will not overwrite
+an existing zarr data store.  Setting this flag allows overwriting;
+use it with care!
+
+* **nlevels**: "Level" refers to how many levels of resolution
+will be created in the multi-resolution OME-Zarr data store.
+The default, 6, means that in addition to the full-resolution
+zarr store, 5 more will be created at successively lower
+resolutions.
+
+    `zarr_to_ome` always reduces the resolution by a factor
+    of 2 from one level to the next, along all 3 axes, so each level
+    is approximately 8 times smaller in data volume than the previous
+    level (approximately, because the chunks may not line up exactly
+    with the data volume boundaries).
+
+    A **special case** is when nlevel = 1.  In this case,
+    an OME-Zarr hierarchy is not created.  Instead, a simple
+    zarr data store is created, having the name of the
+    given output directory.
+
+### Examples
+
+Here are some examples of how `zarr_to_ome` can be used.
+
+#### Window a data store
+
+Suppose you want to work with just the center part of a scroll.
+One way to do this is:
+
+`python zarr_to_ome.py /mnt/vesuvius/scroll1.zarr /mnt/vesuvius/windowed_scroll1.zarr --window 2000:5000,2500:5500,7000:11000`
+
+This specifies that the output data store should only contain data
+from the input data store that is in the range x = 2000 to 5000,
+y = 2500 to 5500, z = 7000 to 11000.
+
+Note that the output data is windowed,
+but it is not shifted.  So if you look at the output OME-Zarr
+store in a viewer such as `khartes`, you will see data
+in the region that extends from 2000 to 5000 in the x direction, 
+2500 to 5500 in the y direction, etc.  Outside that window,
+the pixel values are zero.
+
+#### Shift and window a data store
+
+Perhaps, as in the previous example, you want to work
+with only the center part of a scroll, but you want to
+shift the subset so that the data in it begins at the origin (0,0,0).
+In that case, the command to use is:
+
+`python zarr_to_ome.py /mnt/vesuvius/scroll1.zarr /mnt/vesuvius/windowed_scroll1.zarr --window 2000:5000,2500:5500,7000:11000 --shift=-2000,-2500,-7000`
+
+Recall that the `--shift` parameter is alway applied after 
+the windowing has taken place.
+So what this command does is first, window the data 
+in the range specified by `--window`, the same as in the previous
+example.
+
+Next, the `--shift` parameter is applied, so the windowed data is
+shifted to the origin.
+
+**Important note**: the command-line parser can be confused by arguments
+that start with a minus sign, such as the `-2000,-2500,-7000` in
+the command line above.  The way to avoid this confusion
+is to attach this parameter to the `--shift` by using an
+equal sign, as above, instead of separating it by a space.
+
+#### Download and convert a data set from the Vesuvius Challenge server
+
+Suppose you want to process the central part of Scroll 5,
+using an external program that you have developed.
+In this case you need the data in a simple form that your program can
+easily accept.
+
+For this purpose,
+you only want to create a single-level zarr data store; you don't
+need the entire OME-Zarr multi-resolution hierarchy.
+Furthermore, you want to make sure that the output chunks
+are uncompressed, so your program doesn't need to figure
+out how to decompress them.
+And your external program only accepts
+chunks that are 500x500x500 in size.
+
+And one more thing: you have not yet downloaded the
+Scroll 5 data set, so you need to stream the data from
+the Vesuvius Challenge server.
+
+The command to do this is:
+
+`python zarr_to_ome.py https://dl.ash2txt.org/other/dev/scrolls/5/volumes/53keV_7.91um.zarr /mnt/vesuvius/scroll5/center.zarr --chunk_size 500 --window 3000:5000,3000:5000,8000:11000 --shift=-3000,-3000,-8000 --compression none --nlevels 1`
+
+#### Convert an indicator zarr data store to OME-Zarr
+
+In general, data can be considered to belong
+to either of two categories: *continuous*
+or *indicator*.  
+
+Physical data, such as x-ray opacity, is
+considered to be *continuous*; if you have two adjacent voxels,
+the arithmetic average of the values in the two voxels makes
+physical sense.
+
+Data where each integer value represents a separate category,
+for instance, 0=normal, 1=vertical-fiber, 2=horizontal-fiber,
+is called *indicator* data.  With this data, taking the
+arithmetic average of the values in two adjacent voxels does
+not make sense.  If two adjacent cells have values
+0 (normal cell) and 2 (horizontal fiber),
+the arithmetic average, 1 (vertical fiber), cannot be correct.
+
+So in the case of an *indicator* zarr data store, the lower-resolution
+OME-Zarr layers cannot be constructed from the higher-resolution layers
+using an arithmetic average, the default for `zarr_to_ome`.  Instead,
+a different algorithm must be used.  So:
+
+`python zarr_to_ome.py /mnt/vesuvius/fiber_indicator.zarr /mnt/vesuvius/fiber_indicator_ome.zarr --algorithm nearest`
+
+For more details, see the explanation of 
+the `algorithm` argument above.
 
 ## User guide for `ppm_to_layers`
 

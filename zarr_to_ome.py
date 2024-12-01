@@ -8,11 +8,30 @@ import copy
 import numpy as np
 import tifffile
 import zarr
+import fsspec
+import warnings
 from numcodecs.registry import codec_registry
 import skimage.transform
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
+
+# Suppress warning about NestedDirectoryStore being removed
+# in zarr version 3.  
+warnings.filterwarnings("ignore", message="The NestedDirectoryStore.*")
+# Per https://github.com/zarr-developers/zarr-python/blob/v2.18.3/zarr/storage.py :
+'''
+NestedDirectoryStore will be removed in Zarr-Python 3.0 where controlling
+the chunk key encoding will be supported as part of the array metadata. See
+`GH1274 <https://github.com/zarr-developers/zarr-python/issues/1274>`_
+for more information.
+'''
+
+# Controls the number of open https connections;
+# if this is not set, the Vesuvius Challenge data server 
+# may complain of too many requests
+# https://filesystem-spec.readthedocs.io/en/latest/async.html
+fsspec.config.conf['nofiles_gather_batch_size'] = 10
 
 class DecompressedLRUCache(zarr.storage.LRUStoreCache):
     def __init__(self, store, max_size):
@@ -43,9 +62,7 @@ class DecompressedLRUCache(zarr.storage.LRUStoreCache):
     # (see the transferCompressor function), do the decompression
     # here.
     def getValue(self, key):
-        # print("getValue", key)
         value = self._store[key]
-        # print("nv", type(value), len(value))
         if len(value) > 0 and self.compressor is not None:
             for i in range(3):
                 try:
@@ -53,9 +70,7 @@ class DecompressedLRUCache(zarr.storage.LRUStoreCache):
                     break
                 except Exception as e:
                     print("decompression failure try %d: %s"%(i+1, e))
-            # print("dc", type(dc), len(dc))
             return dc
-        # print("  found", key)
         return value
 
     # This is identical to __getitem__ in LRUStoreCache,
@@ -77,7 +92,8 @@ class DecompressedLRUCache(zarr.storage.LRUStoreCache):
             value = self.getValue(key)
             with self._mutex:
                 self.misses += 1
-                # need to check if key is not in the cache, as it may have been cached
+                # need to check if key is not in the cache, 
+                # as it may have been cached
                 # while we were retrieving the value from the store
                 if key not in self._values_cache:
                     self._cache_value(key, value)
@@ -99,9 +115,6 @@ def parseShift(istr):
     shift = []
     for sstr in sstrs:
         i = int(sstr)
-        if i<3:
-            print("shift coordinates must be non-negative")
-            return None
         shift.append(i)
     return shift
 
@@ -143,19 +156,6 @@ def slice_stop(s, default=0):
     if s is None or s.stop is None:
         return default
     return s.stop
-
-'''
-def slice_count(s, maxx):
-    mn = s.start
-    if mn is None:
-        mn = 0
-    mn = max(0, mn)
-    mx = s.stop
-    if mx is None:
-        mx = maxx
-    mx = min(mx, maxx)
-    return mx-mn
-'''
 
 def divp1(s, c):
     n = s // c
@@ -229,6 +229,14 @@ def create_ome_headers(zarrdir, nlevels):
     json.dump(zgroup_dict, (zarrdir / ".zgroup").open("w"), indent=4)
     json.dump(zad, (zarrdir / ".zattrs").open("w"), indent=4)
 
+
+def path_is_file(path):
+    fs, _, _ = fsspec.get_fs_token_paths(path)
+    proto = fs.protocol
+    print("fsspec protocol(s):", proto)
+    return "file" in proto
+
+
 # compression is None or a string.  None means use the
 # compression of the input zarr, a string of "none" or "" means 
 # no compression; otherwise the string gives the name of the compression
@@ -243,7 +251,7 @@ def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_
     # we use z,y,x order
     shift = (shift[2], shift[1], shift[0])
     slices = (slices[2], slices[1], slices[0])
-    # TODO: slice_start >= 0 for all slices
+    # slice_start >= 0 for all slices
     if not all([(slice_start(s)>=0) for s in slices]):
         err = "All window starting coordinates must be >= 0"
         print(err)
@@ -252,7 +260,22 @@ def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_
         err = "All window steps must be 1"
         print(err)
         return err
-    izarr = zarr.open(izarrdir, mode="r")
+    try:
+        izarr = zarr.open(izarrdir, mode="r")
+    except Exception as e:
+        err = "Could not open %s; error is %s"%(izarrdir, e)
+        print(err)
+        return err
+    is_ome = False
+    if isinstance(izarr, zarr.hierarchy.Group):
+        print("It appears that",izarrdir,"\nis an OME-Zarr store rather than a simple zarr store.\nI will attempt to open the highest-resolution zarr store in this hierarchy\n")
+        if '0' in izarr:
+            izarr = izarr['0']
+        else:
+            err = "%s does not appear to be a zarr or OME-Zarr data store"
+            print(err)
+            return err
+        is_ome = True
     chunk_sizes = izarr.chunks
     if chunk_size is not None:
         chunk_sizes = (chunk_size, chunk_size, chunk_size)
@@ -277,46 +300,57 @@ def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_
             # if compression_opts is dict:
             # compressor = codec_cls(**compression_opts)
 
-    # TODO: allow larger max_size
-    # TODO: store decompressed chunks in cache
-    store = izarr.store
-    # cstore = zarr.LRUStoreCache(store, max_size=2**32)
-    cstore = DecompressedLRUCache(store, max_size=2**32)
-    czarr = zarr.open(cstore, mode="r")
-    cstore.transferCompressor(czarr)
-    # czarr = izarr
+    # If izarrdir is not a file (ie if it is a url for streaming),
+    # then setting up the cache is very slow (the zarr.open line
+    # below takes a very long time).  So in the case of a url better
+    # to skip caching
+    if path_is_file(izarrdir):
+        # TODO: allow larger max_size
+        store = izarr.store
+        print("Using cache for input data")
+        cstore = DecompressedLRUCache(store, max_size=2**32)
+        if is_ome:
+            root = zarr.group(store=cstore)
+            czarr = root['0']
+        else:
+            czarr = zarr.open(cstore, mode="r")
+        cstore.transferCompressor(czarr)
+    else:
+        czarr = izarr
+
     ishape = izarr.shape
-    # is0 and is1 are the min and max of the input zarr, shifted
-    # to the output zarr's grid
-    is0 = [shift[i] for i in range(3)]
-    is1 = [ishape[i]+shift[i] for i in range(3)]
-    # ozarr covers the range 0,0,0 to stop-point of given window 
-    # (or max of shifted izarr, if no window given)
-    oshape = [slice_stop(slices[i], is1[i]) for i in range(3)]
-    # os0 and os1 are the min and max of the region in
-    # ozarr that should be written to, based on the given
-    # window (if none given, use 0,0,0 and max of shifted izarr)
-    os0 = [slice_start(slices[i], 0) for i in range(3)]
-    # os1 = [slice_stop(slices[i], is1[i]) for i in range(3)]
-    os1 = [oshape[i] for i in range(3)]
-    if not all([(os1[i] > os0[i]) for i in range(3)]):
+
+    # i0 and i1 are the min and max of the input zarr
+    # before windowing and shifting
+    i0 = [0, 0, 0]
+    i1 = ishape
+    # iw0 and iw1 are the min and max of the windowed
+    # part of the input zarr before shifting
+    iw0 = [slice_start(slices[i], i0[i]) for i in range(3)]
+    iw1 = [slice_stop(slices[i], i1[i]) for i in range(3)]
+    # TODO verify that iw1 is > iw0 ?
+
+    # iws0 and iws1 are the min and max of the
+    # windowed, shifted input zarr.
+    iws0 = [iw0[i] + shift[i] for i in range(3)]
+    iws1 = [iw1[i] + shift[i] for i in range(3)]
+    # os0 and os1 are the min and max of the output
+    # zarr in shifted coordinates
+    os0 = [max(0, iws0[i]) for i in range(3)]
+    os1 = [max(0, iws1[i]) for i in range(3)]
+    # TODO verify that os0 < os1?
+    if not all([os0[i] < os1[i] for i in range(3)]):
         err = "Computed conflicting output grid min %s and max %s"%(str(os0), str(os1))
         print(err)
         return err
+
+    oshape = os1
+
     # cs0 and cs1 are the min and max of the part of the input grid
     # that should be copied to the output grid, 
     # in shifted (output-grid) coordinates
-    cs0 = [max(os0[i], is0[i]) for i in range(3)]
-    cs1 = [min(os1[i], is1[i]) for i in range(3)]
-    '''
-    # Note that the code below is wrong; we want the intersection
-    # between is0 to is1,  and 0,0,0 to oshape
-    cs0 = [max(slice_start(slices[i]), is0[i]) for i in range(3)]
-    # TODO: This won't work!!!
-    cs1 = [min(slice_stop(slices[i]),  is1[i]) for i in range(3)]
-    # TODO: make sure cs1 > 0
-    # oshape = [shift[i]+ishape[i] for i in range(3)]
-    '''
+    cs0 = [max(os0[i], iws0[i]) for i in range(3)]
+    cs1 = [min(os1[i], iws1[i]) for i in range(3)]
 
     store = zarr.NestedDirectoryStore(ozarrdir)
     ozarr = zarr.open(
@@ -330,36 +364,21 @@ def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_
             mode='w', 
             )
 
-    # chunk0s = [shift[i] // chunk_sizes[i] for i in range(3)]
-    # nchunks = [divp1(oshape[i], chunk_sizes[i]) for i in range(3)]
     chunk0s = [cs0[i] // chunk_sizes[i] for i in range(3)]
     chunk1s = [cs1[i] // chunk_sizes[i] for i in range(3)]
     print("chunk_sizes", chunk_sizes)
     # print("chunk0s", chunk0s)
     # print("nchunks", nchunks)
     ci = [0,0,0]
-    # for ci[0] in range(chunk0s[0], nchunks[0]):
     for ci[0] in range(chunk0s[0], chunk1s[0]):
         print("doing", ci[0], "to", chunk1s[0])
         for ci[1] in range(chunk0s[1], chunk1s[1]):
             for ci[2] in range(chunk0s[2], chunk1s[2]):
+                # print(ci)
                 o0 = [max(cs0[i], chunk_sizes[i]*ci[i]) for i in range(3)]
                 o1 = [min(cs1[i], chunk_sizes[i]*(1+ci[i])) for i in range(3)]
                 i0 = [o0[i]-shift[i] for i in range(3)]
                 i1 = [o1[i]-shift[i] for i in range(3)]
-                '''
-                o0 = [chunk_sizes[i]*ci[i] for i in range(3)]
-                o1 = [o0[i]+chunk_sizes[i] for i in range(3)]
-                i0 = [o0[i]-shift[i] for i in range(3)]
-                s0 = [max(0,-i0[i]) for i in range(3)]
-                o0 = [o0[i]+s0[i] for i in range(3)]
-                i0 = [o0[i]-shift[i] for i in range(3)]
-                i1 = [o1[i]-shift[i] for i in range(3)]
-                '''
-                # print("o0", o0)
-                # print("o1", o1)
-                # print("i0", i0)
-                # print("i1", i1)
                 ozarr[o0[0]:o1[0], o0[1]:o1[1], o0[2]:o1[2]] = czarr[i0[0]:i1[0], i0[1]:i1[1], i0[2]:i1[2]] // divisor
 
 
@@ -433,7 +452,10 @@ def main():
     # parser = argparse.ArgumentParser()
     parser = argparse.ArgumentParser(
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-            description="Create OME/Zarr data store from an existing zarr data store")
+            description="Create OME/Zarr data store from an existing zarr data store",
+            # allow_abbrev=False,
+            # prefix_chars='--',
+            )
     parser.add_argument(
             "input_zarr_dir", 
             help="Name of zarr store directory")
@@ -441,43 +463,43 @@ def main():
             "output_zarr_ome_dir", 
             help="Name of directory that will contain OME/zarr datastore")
     parser.add_argument(
-            "--nlevels", 
-            type=int, 
-            default=6, 
-            help="Number of subdivision levels to create, including level 0")
-    parser.add_argument(
-            "--overwrite", 
-            action="store_true", 
-            help="Overwrite the output directory, if it already exists")
-    parser.add_argument(
-            "--num_threads", 
-            type=int, 
-            default=cpu_count(), 
-            help="Advanced: Number of threads to use for processing. Default is number of CPUs")
-    parser.add_argument(
             "--algorithm",
             choices=['mean', 'gaussian', 'nearest'],
             default="mean",
-            help="Advanced: algorithm used to sub-sample the data")
-    parser.add_argument(
-            "--shift", 
-            help="Advanced: shift input data set, relative to output data set.  Example (in xyz order): 2000,3000,5500")
-    parser.add_argument(
-            "--window", 
-            help="Advanced: output only a subset of the data.  Example (in xyz order, and based on the output-data grid): 2500:3000,1500:4000,500:600")
-    
+            help="Algorithm used to sub-sample the data.  Use 'mean' if the input data is continuous, 'nearest' if the input data represents an indicator")
     parser.add_argument(
             "--chunk_size", 
             type=int,
             help="Size of chunk; if not given, will be same as input zarr")
     parser.add_argument(
-            "--compression", 
-            help="Compression algorithm ('blosc', 'none', ...); if not given, will be same as input zarr; if set to 'none', no compression will be used")
+            "--shift", 
+            help="Shift input data set, relative to output data set.  Example (in xyz order): 2000,3000,5500")
+    parser.add_argument(
+            "--window", 
+            help="Output only a subset of the data.  Example (in xyz order, and based on the output-data grid): 2500:3000,1500:4000,500:600")
     parser.add_argument(
             "--bytes",
             type=int,
             default=0,
             help="number of bytes per pixel in output; if not given, will be same as input zarr")
+    parser.add_argument(
+            "--compression", 
+            help="Compression algorithm ('blosc', 'none', ...); if not given, will be same as input zarr; if set to 'none', no compression will be used")
+    parser.add_argument(
+            "--overwrite", 
+            action="store_true", 
+            help="Overwrite the output directory, if it already exists")
+    parser.add_argument(
+            "--nlevels", 
+            type=int, 
+            default=6, 
+            help="Number of subdivision levels to create, including level 0")
+    parser.add_argument(
+            "--num_threads", 
+            type=int, 
+            default=cpu_count(), 
+            help="Advanced: Number of threads to use for processing. Default is number of CPUs")
+    
 
     args = parser.parse_args()
     
@@ -486,10 +508,7 @@ def main():
         print("Name of ouput zarr directory must end with '.zarr'")
         return 1
     
-    izarrdir = Path(args.input_zarr_dir)
-    if not izarrdir.exists():
-        print("Input zarr directory",izarrdir,"does not exist")
-        return 1
+    izarrdir = args.input_zarr_dir
 
     nlevels = args.nlevels
     overwrite = args.overwrite
@@ -535,14 +554,18 @@ def main():
         print("error returned:", err)
         return 1
     
-    err = create_ome_headers(ozarrdir, nlevels)
-    if err is not None:
-        print("error returned:", err)
-        return 1
+    if nlevels > 1:
+        err = create_ome_headers(ozarrdir, nlevels)
+        if err is not None:
+            print("error returned:", err)
+            return 1
     
     print("Creating level 0")
+    level0dir = ozarrdir/"0"
+    if nlevels == 1:
+        level0dir = ozarrdir
     print("shift", shift, "slices", slices)
-    err = zarr2zarr(izarrdir, ozarrdir/"0", shift=shift, slices=slices, chunk_size=chunk_size, compression=compression, dtype=dtype)
+    err = zarr2zarr(izarrdir, level0dir, shift=shift, slices=slices, chunk_size=chunk_size, compression=compression, dtype=dtype)
     if err is not None:
         print("error returned:", err)
         return 1
