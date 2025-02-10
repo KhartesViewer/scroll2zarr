@@ -16,22 +16,23 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
 
-# Suppress warning about NestedDirectoryStore being removed
-# in zarr version 3.  
-warnings.filterwarnings("ignore", message="The NestedDirectoryStore.*")
-# Per https://github.com/zarr-developers/zarr-python/blob/v2.18.3/zarr/storage.py :
-'''
-NestedDirectoryStore will be removed in Zarr-Python 3.0 where controlling
-the chunk key encoding will be supported as part of the array metadata. See
-`GH1274 <https://github.com/zarr-developers/zarr-python/issues/1274>`_
-for more information.
-'''
+def init_o2z_globals():
+    # Suppress warning about NestedDirectoryStore being removed
+    # in zarr version 3.  
+    warnings.filterwarnings("ignore", message="The NestedDirectoryStore.*")
+    # Per https://github.com/zarr-developers/zarr-python/blob/v2.18.3/zarr/storage.py :
+    '''
+    NestedDirectoryStore will be removed in Zarr-Python 3.0 where controlling
+    the chunk key encoding will be supported as part of the array metadata. See
+    `GH1274 <https://github.com/zarr-developers/zarr-python/issues/1274>`_
+    for more information.
+    '''
 
-# Controls the number of open https connections;
-# if this is not set, the Vesuvius Challenge data server 
-# may complain of too many requests
-# https://filesystem-spec.readthedocs.io/en/latest/async.html
-fsspec.config.conf['nofiles_gather_batch_size'] = 10
+    # Controls the number of open https connections;
+    # if this is not set, the Vesuvius Challenge data server 
+    # may complain of too many requests
+    # https://filesystem-spec.readthedocs.io/en/latest/async.html
+    fsspec.config.conf['nofiles_gather_batch_size'] = 10
 
 class DecompressedLRUCache(zarr.storage.LRUStoreCache):
     def __init__(self, store, max_size):
@@ -365,7 +366,9 @@ def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_
             )
 
     chunk0s = [cs0[i] // chunk_sizes[i] for i in range(3)]
-    chunk1s = [cs1[i] // chunk_sizes[i] for i in range(3)]
+    # TODO: should chunk1s be incremented by 1?
+    # chunk1s = [cs1[i] // chunk_sizes[i] for i in range(3)]
+    chunk1s = [(cs1[i]-1) // chunk_sizes[i] + 1 for i in range(3)]
     print("chunk_sizes", chunk_sizes)
     # print("chunk0s", chunk0s)
     # print("nchunks", nchunks)
@@ -405,6 +408,10 @@ def process_chunk(args):
         obuf = np.round(skimage.transform.rescale(ibuf, .5, preserve_range=True))
     elif algorithm == "mean":
         obuf = np.round(skimage.transform.downscale_local_mean(ibuf, (2,2,2)))
+    elif algorithm == "max":
+        s = ibuf.shape
+        ibuf = ibuf.reshape((s[0]//2,2,s[1]//2,2,s[2]//2,2))
+        obuf = np.max(ibuf, axis=(1,3,5))
     else:
         raise ValueError(f"algorithm {algorithm} not valid")
 
@@ -448,7 +455,8 @@ def resize(zarrdir, old_level, num_threads, algorithm="mean"):
 
     print("Processing complete")
 
-def main():
+def zarr_to_ome_main():
+    init_o2z_globals()
     # parser = argparse.ArgumentParser()
     parser = argparse.ArgumentParser(
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -464,16 +472,16 @@ def main():
             help="Name of directory that will contain OME/zarr datastore")
     parser.add_argument(
             "--algorithm",
-            choices=['mean', 'gaussian', 'nearest'],
+            choices=['mean', 'gaussian', 'nearest', 'max'],
             default="mean",
-            help="Algorithm used to sub-sample the data.  Use 'mean' if the input data is continuous, 'nearest' if the input data represents an indicator")
+            help="Algorithm used to sub-sample the data.  Use 'mean' if the input data is continuous, 'nearest' or 'max' if the input data represents an indicator")
     parser.add_argument(
             "--chunk_size", 
             type=int,
             help="Size of chunk; if not given, will be same as input zarr")
     parser.add_argument(
             "--shift", 
-            help="Shift input data set, relative to output data set.  Example (in xyz order): 2000,3000,5500")
+            help="Shift input data set, relative to output data set.  Example (in xyz order): 2000,3000,5500.  If any of the shifts is negative, use '=' instead of space with flag, for example --shift=-1000,-2000,-3000 instead of --shift -1000,-2000,-3000")
     parser.add_argument(
             "--window", 
             help="Output only a subset of the data.  Example (in xyz order, and based on the output-data grid): 2500:3000,1500:4000,500:600")
@@ -495,6 +503,10 @@ def main():
             default=6, 
             help="Number of subdivision levels to create, including level 0")
     parser.add_argument(
+            "--rebuild", 
+            action="store_true", 
+            help="In existing OME directory, rebuild higher levels but leave level 0 alone; if this flag is set, the input zarr directory name is still required, but its value is ignored")
+    parser.add_argument(
             "--num_threads", 
             type=int, 
             default=cpu_count(), 
@@ -512,6 +524,7 @@ def main():
 
     nlevels = args.nlevels
     overwrite = args.overwrite
+    rebuild_higher_levels = args.rebuild
     num_threads = args.num_threads
     algorithm = args.algorithm
     print("overwrite", overwrite)
@@ -540,35 +553,43 @@ def main():
     elif args.bytes == 2:
         dtype = np.uint16
     
-    if not overwrite:
+    if not rebuild_higher_levels:
+        if not overwrite:
+            if ozarrdir.exists():
+                print("Error: Directory",ozarrdir,"already exists")
+                return(1)
+    
         if ozarrdir.exists():
-            print("Error: Directory",ozarrdir,"already exists")
-            return(1)
+            print("removing", ozarrdir)
+            shutil.rmtree(ozarrdir)
     
-    if ozarrdir.exists():
-        print("removing", ozarrdir)
-        shutil.rmtree(ozarrdir)
-    
-    err = create_ome_dir(ozarrdir)
-    if err is not None:
-        print("error returned:", err)
-        return 1
-    
-    if nlevels > 1:
-        err = create_ome_headers(ozarrdir, nlevels)
+        err = create_ome_dir(ozarrdir)
         if err is not None:
             print("error returned:", err)
             return 1
     
-    print("Creating level 0")
-    level0dir = ozarrdir/"0"
-    if nlevels == 1:
-        level0dir = ozarrdir
-    print("shift", shift, "slices", slices)
-    err = zarr2zarr(izarrdir, level0dir, shift=shift, slices=slices, chunk_size=chunk_size, compression=compression, dtype=dtype)
-    if err is not None:
-        print("error returned:", err)
-        return 1
+        if nlevels > 1:
+            err = create_ome_headers(ozarrdir, nlevels)
+            if err is not None:
+                print("error returned:", err)
+                return 1
+    
+        print("Creating level 0")
+        level0dir = ozarrdir/"0"
+        if nlevels == 1:
+            level0dir = ozarrdir
+        print("shift", shift, "slices", slices)
+        err = zarr2zarr(izarrdir, level0dir, shift=shift, slices=slices, chunk_size=chunk_size, compression=compression, dtype=dtype)
+        if err is not None:
+            print("error returned:", err)
+            return 1
+    else:
+        if nlevels <= 1:
+            return 0
+        err = create_ome_headers(ozarrdir, nlevels)
+        if err is not None:
+            print("error returned:", err)
+            return 1
     
     # for each level (1 and beyond):
     existing_level = 0
@@ -579,4 +600,4 @@ def main():
             return 1
 
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(zarr_to_ome_main())

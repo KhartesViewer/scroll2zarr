@@ -453,6 +453,14 @@ x-ray opacity.
     even better would be some kind of
     plurality-based algorithm, but that option is not provided).
 
+    A third option, `max`, selects the maximum value in the
+    high-resolution voxels and assigns it to the lower-resolution
+    voxel.  Like `nearest`, this algorithm is appropriate
+    when the voxel values represent an indicator.
+
+    If you have indicator data, you might want to experiment with
+    both `nearest` and `max`.
+
     **Conclusion**: choose the algorithm based on the type of
     data you are converting.
     The `zarr_to_ome` script is not
@@ -579,6 +587,13 @@ resolutions.
     an OME-Zarr hierarchy is not created.  Instead, a simple
     zarr data store is created, having the name of the
     given output directory.
+
+* **rebuild**:  If this is set, and if you have an existing OME directory,
+    the higher levels (lower-resolution levels) will be rebuilt,
+    but level 0 (highest resolution) will remain unchanged.
+    The input zarr directory 
+    name is required, but ignored.
+    
 
 ### Examples
 
