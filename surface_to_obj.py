@@ -22,10 +22,6 @@ def adaptiveDecimate1d(xyzs, flags, axis, min_ratio, min_length, level):
     nint = (nf-1) // n2p1
     if nint == 0:
         return
-    # tfs[0,1] = 0
-    # ntrunc = n2p1*nint+1
-    # trunc = trfs[:ntrunc,:]
-    # nte = ntrunc+n2p1-1
     # nte is length that is truncated to nint*n2p1, and
     # then extended to next multiple of n2p1
     nte = n2p1*(nint+1)
@@ -78,24 +74,15 @@ def adaptiveDecimate1d(xyzs, flags, axis, min_ratio, min_length, level):
 # n is the number of surviving points, and m is the number
 # of elements per point (usually 6: x,y,z,u,v,flag)
 def adaptiveDecimate2d(vcpsd, flags, min_ratio, min_length):
-    # TODO: testing
-    # vcpsd = vcpsd[:33,:33,:]
-    # vcpsd = vcpsd[:1025,:1025,:]
-    # vcpsd = vcpsd[:129,:129,:]
-    # flags = np.full(vcpsd.shape[:2], True)
-    
-    # ratio = .02
     for i in range(12):
         adaptiveDecimate1d(vcpsd, flags, 1, min_ratio, min_length, i)
     for i in range(12):
         adaptiveDecimate1d(vcpsd, flags, 0, min_ratio, min_length, i)
-    # vcpsd = vcpsd[flags]
     return vcpsd[flags]
 
 def simpleDecimateTest():
     testshape = (7,2,3)
     
-    # testflags = np.full(testshape[:2], 1, dtype=np.uint8)
     testflags = np.full(testshape[:2], True)
     # testflags[1,0] = False
     # testflags[2,0] = False
@@ -134,23 +121,10 @@ def gridDecimate(xyzuv, zstep, zsmoothing):
         sigmas = (zsmoothing, zsmoothing*psr)
         for i in range(3):
             # xuzuv[:,:,i] = scipy.ndimage.gaussian_filter(xuzuv[:,:,i], sigmas, mode='nearest')
-            # The OpenCV version is faster:
+            # The OpenCV version of Gaussian blur is faster:
             xyzuv[:,:,i] = cv2.GaussianBlur(xyzuv[:,:,i], (0,0), sigmas[0], sigmas[1], cv2.BORDER_ISOLATED)
 
     return xyzuv[::dec0,::dec1,:]
-
-'''
-def readPpmOld(ppm_path):
-    tif_path = ppm_path.with_suffix('.tif')
-    ppm_fd = open(ppm_path, "rb")
-    tif = tifffile.imread(tif_path)
-    print("tif shape", tif.shape)
-    ppm_raw = np.fromfile(ppm_fd, dtype=np.float64)
-    print("ppm_raw shape", ppm_raw.shape, ppm_raw.shape[0]/(tif.shape[0]*tif.shape[1]))
-    # ppm = ppm_raw.reshape(tif.shape[0], tif.shape[1], 2, 3)
-    ppm = ppm_raw.reshape(tif.shape[0], tif.shape[1], 6)
-    print (ppm.shape)
-'''
 
 def readIndexedPpm(ppm_path):
     ppm = Ppm.loadPpm(ppm_path)
@@ -233,7 +207,6 @@ def readVcps(vcps_path):
 def addIndexToXyzs(vcps):
     # print(vcps[0][0], vcps[1][0])
     indices = np.indices((vcps.shape[:2]), dtype=np.float64)
-    # indexed_vcps = np.concatenate((vcps,indices[0][:,:,np.newaxis],indices[1][:,:,np.newaxis]), axis=2)
     indexed_vcps = np.zeros((vcps.shape[0], vcps.shape[1], 6), dtype=np.float64)
     indexed_vcps[:,:,:3] = vcps
     indexed_vcps[:,:,3:5] = indices.transpose(1,2,0)[:,:,::-1]
@@ -241,34 +214,9 @@ def addIndexToXyzs(vcps):
     print("iv", indexed_vcps.shape)
     return indexed_vcps
 
-# ratio of point spacing between slices vs
-# point spacing on slice plane
-def point_spacing_ratio_old(indexed_vcps):
-    '''
-    vcps = indexed_vcps[:3]
-    d0vcps = np.diff(vcps, axis=0)
-    d0vcps = np.sqrt((d0vcps*d0vcps).sum(axis=2))
-    d1vcps = np.diff(vcps, axis=1)
-    d1vcps = np.sqrt((d1vcps*d1vcps).sum(axis=2))
-    d0avg = np.average(d0vcps)
-    d1avg = np.average(d1vcps)
-    print("avg", np.average(d0vcps), np.average(d1vcps))
-    return d0avg / d1avg
-    '''
-    d0avg, d1avg = pointSpacing(indexed_vcps)
-    return d0avg / d1avg
-
-def point_spacing_old(indexed_vcps):
-    vcps = indexed_vcps[:3]
-    d0vcps = np.diff(vcps, axis=0)
-    d0vcps = np.sqrt((d0vcps*d0vcps).sum(axis=2))
-    d1vcps = np.diff(vcps, axis=1)
-    d1vcps = np.sqrt((d1vcps*d1vcps).sum(axis=2))
-    d0avg = np.average(d0vcps)
-    d1avg = np.average(d1vcps)
-    print("avg", np.average(d0vcps), np.average(d1vcps))
-    return d0avg, d1avg
-
+# returns average xyz distance between points in the
+# two directions (d0 is in the z direction, d1 is in the 
+# winding direction)
 def pointSpacing(indexed_vcps):
     vcps = indexed_vcps[:,:,:3]
     flags = indexed_vcps[:,:,5]
@@ -309,7 +257,6 @@ class TrglList:
         istps = np.floor(uvpts/uvstep - id0).astype(np.int32)
         # print("outsidePoints arr", id0, idn, istps, arr.shape)
         # print("outsidePoints arr", id0, idn, arr.shape)
-        # arr[istps[:,0], istps[:,1]] = 0
         arr[istps[:,0], istps[:,1]] = 0
         # cv2.imwrite("test.png", arr)
         ccoutput = cv2.connectedComponentsWithStats(arr, 4, cv2.CV_32S)
@@ -416,7 +363,6 @@ class TrglList:
         trgls = self.trgls
         if trgls is None:
             return None
-        # bvec = (trgls[:,0] == pt_index) | (trgls[:,1] == pt_index) | (trgls[:,2] == pt_index)
         bvec = (trgls == pt_index).any(axis=1)
         tindexes = np.where(bvec)[0]
         # return tindexes.tolist()
@@ -489,8 +435,6 @@ class TrglList:
         fpts = np.zeros((onpts), dtype=np.bool_)
         fpts[trgls.flatten()] = True
         nnpts = fpts.sum()
-        # npts = np.zeros((nnpts), dtype=trgls.dtype)
-        # npts[:] = np.arange(nnpts)
         opts = np.full((onpts), -1, dtype=np.int32)
         opts[fpts] = np.arange(nnpts)
         self.trgls = opts[trgls]
@@ -519,24 +463,6 @@ class TrglList:
 
     def saveAsObjFile(self, xyz, uv, obj_name):
         obj_fd = open(obj_name, "w")
-        # convert from a 2D array of xyzuv points to a
-        # 1D list of xyzuv points
-        # xyzuv = xyzuv.reshape(-1,6)
-        
-        # uv = xyzuv[:,3:5]
-        # print(uv.shape)
-        
-        '''
-        uvpts = uv.copy()
-        uvpts[:,0] += .00001*uvpts[:,1]
-        uvpts[:,1] += .00001*uvpts[:,0]
-        '''
-        
-        # print("triangulating")
-        # trgls = Delaunay(uvpts.reshape(-1,2)).simplices
-        # trgls = Delaunay(uvpts).simplices
-        # trgls = fromEmbayedDelaunay(uvpts)
-        # print(len(trgls))
         print("saving", obj_name.name, len(xyz), len(self.trgls))
         for pt in xyz:
             print("v", pt[0], pt[1], pt[2], file=obj_fd)
@@ -546,13 +472,6 @@ class TrglList:
             print("f", trgl[0]+1, trgl[1]+1, trgl[2]+1, file=obj_fd)
 
     def saveAsObjFiles(self, xyz, uv, obj_name):
-        '''
-        tl = TrglList()
-        tl.trgls = self.trgls
-        pts = tl.renumberTrgls()
-        lxyz, luv = self.renumberUsingPts(pts, xyz, uv)
-        tl.saveAsObjFile(lxyz, luv, obj_name)
-        '''
         self.saveAsObjFile(xyz, uv, obj_name)
         components = self.connectedComponents()
         if components is None:
@@ -565,13 +484,6 @@ class TrglList:
         if len(components) > 1:
             for i,c in enumerate(components):
                 pts, tl = c
-                '''
-                npts = pts.shape[0]
-                # print(" ", len(pts))
-                # assumes that pts is ordered
-                lxyz = xyz[:npts][pts > -1]
-                luv = uv[:npts][pts > -1]
-                '''
                 lxyz, luv = self.renumberUsingPts(pts, xyz, uv)
                 oname = (obj_name.parent / ("%s%03d"%(stem,i+1))).with_suffix(suff)
                 tl.saveAsObjFile(lxyz, luv, oname)
@@ -679,23 +591,15 @@ def sphericalDecimateTest(idir):
     indexed_vcps[:,:,1] = indexed_vcps[:,:,4]/szf
     vxy = (indexed_vcps[:,:,:2] - 1.)
     indexed_vcps[:,:,2] = np.sqrt(2-(vxy*vxy).sum(axis=2))
-    # indexed_vcps[:,:,2] = (vxy*vxy).sum(axis=2)
     
     vcpsd = indexed_vcps
-    # ratio = .0075
     ratio = .003
-    # ratio = .001
-    # ratio = .02
-    # length = 2*ratio/szf
-    # length = .0061/szf
     length = 4*ratio/szf
-    # length = 0
     flags = np.full(vcpsd.shape[:2], True)
     flags = indexed_vcps[:,:,2] > 1
     for i in range(12):
         adaptiveDecimate1d(vcpsd, flags, 0, ratio, length, i)
         adaptiveDecimate1d(vcpsd, flags, 1, ratio, length, i)
-    # for i in range(12):
     
     vcpsd = vcpsd[flags]
     
@@ -716,7 +620,6 @@ def parseSlices(istr, dim):
         if len(parts) == 1:
             slices.append(slice(int(parts[0])))
         else:
-            # iparts = [None if p=="" else int(p) for p in parts]
             iparts = [None if p=="" else float(p) for p in parts]
             if len(iparts)==2:
                 iparts.append(None)
@@ -777,7 +680,7 @@ def main():
             "--zstep",
             type=int,
             default=24,
-            help="z decimation step size (xy step size will be computed from this; 0 means no decimation")
+            help="z decimation step size (xy step size will be computed from this); 0 means no decimation")
     parser.add_argument(
             "--zsmooth",
             type=float,
@@ -785,10 +688,10 @@ def main():
             help="z decimation smoothing length (xy smoothing length will be computed from this); 0 means no smoothing")
     parser.add_argument(
             "--xyzwindow",
-            help="Output only that part of the surface that lies within a given xyz range.  Example (in xyz coordinates): 2500:3000,1500:2000,5000:5500")
+            help="Output only that part of the surface that lies within the given xyz range.  Example (in xyz coordinates): 2500:3000,1500:2000,5000:5500")
     parser.add_argument(
             "--uvwindow",
-            help="Output only that part of the surface that lies within a given uv range.  Example (in uv coordinates): 2000:4000,:")
+            help="Output only that part of the surface that lies within the given uv range.  Example (in uv coordinates): 2000:4000,:")
     args = parser.parse_args()
 
     isurf = Path(args.input_surface_file)
@@ -840,125 +743,8 @@ def main():
         return
     pts = tlist.renumberTrgls()
     lxyz, luv = TrglList.renumberUsingPts(pts, xyzpts, uvpts)
-    # tlist = tlist.window(xyzpts, (4000,0,5000), (10000,10000,6000))
-    # tlist = tlist.window(uvpts, (4000,0), (10000,6000))
 
-    # obj_name = idir/"test.obj"
     tlist.saveAsObjFiles(lxyz, luv, oobj)
 
 if __name__ == '__main__':
     sys.exit(main())
-
-    
-
-# idir =  Path("/Users/dev/Desktop/Progs/Vesuvius/GP/20231106155351")
-idir =  Path(r"C:\Vesuvius\GP\20231106155351")
-iend = idir.name
-vcps_path = idir/"pointset.vcps"
-# obj_fd = open((idir/iend).with_suffix(".obj"), "r")
-
-
-use_ppm = False
-
-if use_ppm:
-    ppm_path = (idir/iend).with_suffix(".ppm")
-    ppm = Ppm.loadPpm(ppm_path)
-    if not ppm.valid:
-        print("Error:", ppm.error)
-        exit()
-    ppm.loadData()
-    xyzs = ppm.ijks
-    flags = (ppm.normals != 0).any(axis=2)
-    print("xyzs", xyzs.shape, xyzs.dtype)
-    indexed_vcps = addIndexToXyzs(xyzs)
-    indexed_vcps[:,:,5] = flags
-    
-    # indexed_vcps = indexed_vcps[5000:6000,:,:]
-    # exit()
-    '''
-    
-    '''
-    ppm_path = (idir/iend).with_suffix(".ppm")
-    indexed_vcps = readIndexedPpm(ppm_path)
-    if indexed_vcps is None:
-        exit()
-
-else:
-
-    # vcps = readVcps(vcps_path)
-    # indexed_vcps = addIndexToXyzs(vcps)
-    indexed_vcps = readIndexedVcps(vcps_path)
-    if indexed_vcps is None:
-        exit()
-
-'''
-# psr = point_spacing_ratio(indexed_vcps)
-d0, d1 = pointSpacing(indexed_vcps)
-print("d0, d1", d0, d1)
-psr = d0 / d1
-
-# TODO: don't skip this step!
-indexed_vcps[:,:,4] /= psr
-
-# print(indexed_vcps[0,0])
-# print(indexed_vcps[0,1])
-
-decimation = 32
-# decimation = 16
-# decimation = 4
-min_ratio = .02
-# min_ratio = .05
-# min_length = 4*decimation * min_ratio * d1
-# min_length = decimation * min_ratio * d1
-# min_length = 32 * min_ratio * d1
-min_length = 16 * min_ratio * d1
-# min_length = 0
-# decimation = 4
-# ratio = .06
-dec0 = decimation
-# dec1 = int(decimation/(d1avg/d0avg))
-dec1 = int(decimation*psr+.5)
-# dec0 = dec1 = 1
-print("dec0,dec1", dec0, dec1)
-# vcpsd = indexed_vcps[::dec0,::dec1,:].reshape(-1,5)
-
-sigmas = (dec0/2,dec1/2)
-sigmas = (dec0/4,dec1/4)
-sigmas = (dec0/8,dec1/8)
-
-"""
-for i in range(3):
-    # indexed_vcps[:,:,i] = scipy.ndimage.gaussian_filter(indexed_vcps[:,:,i], sigmas, mode='nearest')
-    indexed_vcps[:,:,i] = cv2.GaussianBlur(indexed_vcps[:,:,i], (0,0), sigmas[0], sigmas[1], cv2.BORDER_ISOLATED)
-"""
-
-vcpsd = indexed_vcps[::dec0,::dec1,:]
-# vcpsd = indexed_vcps
-
-
-# vcpsd = adaptiveDecimate2d(vcpsd, vcpsd[:,:,5].astype(np.bool_), min_ratio, min_length)
-'''
-
-decimation = 32
-smoothing = 0.
-smoothing = decimation / 2
-vcpsd = gridDecimate(indexed_vcps, decimation, smoothing)
-
-vcpsd = vcpsd.reshape(-1,6)
-# trgls = fromEmbayedDelaunay(vcpsd[:,3:5], 50.)
-'''
-uvpts = vcpsd[:,3:5].copy()
-uvpts[:,0] += .00001*uvpts[:,1]
-uvpts[:,1] += .00001*uvpts[:,0]
-'''
-xyzpts = vcpsd[:,:3]
-uvpts = vcpsd[:,3:5]
-tlist = TrglList.fromEmbayedDelaunay(uvpts, 50., True)
-
-tlist = tlist.window(xyzpts, (4000,0,5000), (10000,10000,6000))
-# tlist = tlist.window(uvpts, (4000,0), (10000,6000))
-
-obj_name = idir/"test.obj"
-# saveAsObjFile(vcpsd, trgls, obj_name)
-tlist.saveAsObjFiles(xyzpts, uvpts, obj_name)
-# wtl.saveAsObjFiles(vcpsd[:,:3], vcpsd[:,3:5], obj_name)
