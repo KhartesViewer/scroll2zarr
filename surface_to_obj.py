@@ -708,6 +708,9 @@ def main():
             indexed_vcps = readIndexedPpm(isurf)
             if indexed_vcps is None:
                 return()
+            # ppm grids cannot be smoothed, due
+            # to irregular boundary
+            zsmooth = 0
         elif suffix == "vcps":
             indexed_vcps = readIndexedVcps(isurf)
             if indexed_vcps is None:
@@ -716,6 +719,8 @@ def main():
         # print("indexed_vcps shape", indexed_vcps.shape)
         vcpsd = gridDecimate(indexed_vcps, zstep, zsmooth)
         vcpsd = vcpsd.reshape(-1,6)
+        # Only keep valid points (ignore invalid ppm points)
+        vcpsd = vcpsd[vcpsd[:,5]!=0]
         xyzpts = vcpsd[:,:3]
         uvpts = vcpsd[:,3:5]
 
@@ -725,7 +730,8 @@ def main():
         deratioed_uvpts = uvpts / [1, psr]
         # use original uvpts for windowing, use de-ratioed uvpts
         # for delaunay and adaptive decimation
-        tlist = TrglList.fromEmbayedDelaunay(deratioed_uvpts, 50., True)
+        baysize = 2*zstep 
+        tlist = TrglList.fromEmbayedDelaunay(deratioed_uvpts, baysize, True)
     elif suffix == "obj":
         result = TrglList.loadFromObjFile(isurf)
         if result is None:
