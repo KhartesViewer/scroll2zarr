@@ -669,7 +669,7 @@ def windowMinMax(istr, pts):
 def main():
     parser = argparse.ArgumentParser(
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-            description="Create obj file from windowed and decimated ppm, vcps, or obj file")
+            description="Create obj file from ppm, vcps, or obj file; apply decimation if desired")
     parser.add_argument(
             "input_surface_file",
             help="obj, ppm, or vcps file")
@@ -680,12 +680,12 @@ def main():
             "--zstep",
             type=int,
             default=24,
-            help="z decimation step size (xy step size will be computed from this); 0 means no decimation")
+            help="z decimation step size (xy step size will be proportional to this); 0 means no decimation")
     parser.add_argument(
             "--zsmooth",
             type=float,
             default=8.,
-            help="z decimation smoothing length (xy smoothing length will be computed from this); 0 means no smoothing")
+            help="z decimation smoothing length (xy smoothing length will be proportional to this); 0 means no smoothing")
     parser.add_argument(
             "--xyzwindow",
             help="Output only that part of the surface that lies within the given xyz range.  Example (in xyz coordinates): 2500:3000,1500:2000,5000:5500")

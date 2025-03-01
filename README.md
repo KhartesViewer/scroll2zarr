@@ -694,6 +694,122 @@ a different algorithm must be used.  So:
 For more details, see the explanation of 
 the `algorithm` argument above.
 
+## User guide for `surface_to_obj`
+
+The `surface_to_obj` script takes a surface in one of several
+formats (`.vcps`, `.ppm`, `.obj`)
+and converts it to the `.obj` format.  Along the way, the surface can
+be windowed in `xyz` (scroll coordinates) 
+or `uv` (parameter coordinates),
+and, depending on the type of input surface, it can be smoothed and/or
+decimated.
+
+The `vc_render` program likewise takes a `.vcps` file as input
+and produces a decimated `.obj` file as output, but
+at the same time it performs a number of other operations
+that the user might not need.  Also, the points
+in the output `.obj` file are not aligned along z slices,
+making it less convenient to edit the points in slice-oriented
+programs such as `khartes`.
+
+`surface_to_obj` requires the user to provide the name of
+a surface file, in `.ppm`, `.vcps`, or `.obj` format (the
+script determines the input file type from the file name).
+
+The user must also provide the name of an output `.obj`
+file.
+
+If you type `python surface_to_obj.py --help` you will see all of the
+options that are available.  The options default to reasonable values,
+so if you leave them all alone, you will get a good result.
+
+What follows is a description of each option.
+
+* **zstep**: This option applies to `.ppm` and `.vcps` inputs.
+It provides a simple form of decimation, retaining only
+points that are `zstep` grid points apart.  So if `zstep` is
+set to 24 (the default), only the points on every 24th z slice will be kept.
+
+    But there is a complication in the case of `.vcps` files.
+    Recall that this file is create from a series of
+    z slices, and each z slice consists of a number of points
+    that are laid out in the 'winding' direction.
+
+    The spacing (in xyz space) between adjacent z slices is
+    usually different than the spacing between adjacent points
+    in the winding direction.
+
+    The difference in spacing means that the input grid is
+    strongly anisotropic in xyz space, and naively triangulating this grid
+    will lead to ugly results.
+
+    The solution is to decimate the grid in such a way that
+    after decimation, the spacing in the z direction is similar
+    to the spacing in the winding direction.  
+
+    When the user specifies `zstep`, this value is used for
+    decimation in the z-slice direction.  The decimation step
+    in the winding direction is calculated so as to produce
+    a reasonably isotropic grid, in terms of xyz spacing,
+    after decimation.  So on a typical grid, if `zstep` is
+    set to 24, the actual
+    decimation would be 24 in the z-slice direction, but, perhaps,
+    7 in the winding direction.
+
+    if `zstep` is set to 0, no decimation is applied (and
+    decimation is never applied to grids created from `.obj` files)
+   
+* **zsmooth**: This option applies only to `.vcps` inputs.
+    This parameter gives the width of the Guassian 'blur' function
+    that is applied to the xyz values on the `.vcps` grid.
+    This smoothing is applied prior to decimation.
+    As with the `zstep` parameter, the smoothing is adjusted
+    to reduce anisotropy after decimation.
+
+    If `zsmooth` is set to 0, no smoothing is applied (and
+    smoothing is never applied to `.ppm` and `.obj` grids).
+
+* **xyzwindow**: This option allows you to create a subset
+of the input data, 
+limiting the output `.obj` file to a given range in x, y, and z.
+
+    The window parameter consists of three ranges, one per axis,
+    with commas separating
+    the three ranges.
+
+    For example, `1000:2000,1500:4000,2000:7000`
+
+    The order is x,y,z, corresponding to the original scroll axes.
+    The format describing the range along each axis is
+    similar to the python "slice" format: 
+    `min:max`, where the extracted data covers the 
+    range min, min+1, min+2, ...,
+    max-3, max-2, max-1.  
+
+    As with the slice format, you can omit part of the range,
+    so that `:5` is the same as `0:5`, `5:` is the same as 5 to the end,
+    and `:` is the same as the entire range.  This last example is
+    useful when you want to limit the ranges
+    on only some of the axes, for instance
+    `:,:,:1000` will take the full xy extent of the first 1000 z slices.
+
+    The python slice format permits a third parameter, the step size,
+    but `surface_to_obj` only allows a step size of 1.
+
+* **uvwindow**: This option allows you to create a subset
+of the input data, 
+limiting the data used to a given range in u and v, the surface
+parameterization values (also called the texture coordinates).
+
+    Note for some input surfaces (such as a `.obj` file created
+    by `vc_render`), u and v are likely to be in the range 0 to 1.
+
+    For surfaces in `vcps` or `ppm` format, the u and v correspond
+    to the array coordinates.  For instance, if the input file
+    is an array of 7500 by 3000 points, the u range will be
+    0 to 7499 and the v range will be 0 to 2999.
+
+
 ## User guide for `ppm_to_layers`
 
 Like `vc_layers_from_ppm`, `ppm_to_layers` takes a `.ppm` file
