@@ -834,6 +834,13 @@ but one of the connected components will disappear.
 So single-connected-component `.obj` files are provided to
 work around this limitation.
 
+**Note on `khartes` bug**
+
+Older versions of `khartes` (prior to khartes3d-beta dated March 3 2025)
+have a bug in the `.obj` importer.  If multiple `.obj` files are
+imported simultaneously, all are visible in `khartes`, but only one
+will be saved.  This bug is fixed in the new version.
+
 ## User guide for `ppm_to_layers`
 
 Like `vc_layers_from_ppm`, `ppm_to_layers` takes a `.ppm` file
