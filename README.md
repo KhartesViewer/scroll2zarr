@@ -809,6 +809,30 @@ parameterization values (also called the texture coordinates).
     is an array of 7500 by 3000 points, the u range will be
     0 to 7499 and the v range will be 0 to 2999.
 
+**Note on the output `.obj` file**
+
+`surface_to_obj` will create several `.obj` files if the triangulated
+surface, after windowing,
+is made up of several connected components.
+
+In this case, the file with the user-provided name, 
+`outname.obj` for instance,
+will contain all the connected components, but 
+addtional `.obj` files will be created
+as well, one per connected component.
+These will be named (for example) `outname001.obj`, `outname002.obj`,
+etc.
+
+The reason for this behavior
+is that `khartes` assumes that each imported
+`.obj` file contains a single-component triangulated surface;
+`khartes` does not correctly handle surfaces with multiple
+connected components.  `khartes` will read 
+and display the surface correctly,
+at first, but once the user begins to edit the surface, all
+but one of the connected components will disappear.
+So single-connected-component `.obj` files are provided to
+work around this limitation.
 
 ## User guide for `ppm_to_layers`
 

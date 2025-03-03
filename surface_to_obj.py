@@ -684,7 +684,7 @@ def main():
     parser.add_argument(
             "--zsmooth",
             type=float,
-            default=8.,
+            default=6.,
             help="z decimation smoothing length (xy smoothing length will be proportional to this); 0 means no smoothing")
     parser.add_argument(
             "--xyzwindow",
