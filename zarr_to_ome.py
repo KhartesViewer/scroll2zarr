@@ -247,7 +247,7 @@ def path_is_file(path):
 # If dtype is None, the input zarr's dtype is used.  Otherwise the
 # given dtype is used.  Note that the only supported conversion
 # is from uint16 to uint8.
-def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_size=None, compression=None, dtype=None):
+def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_size=None, compression=None, dtype=None, channel=0):
     # user gives shift and slices in x,y,z order, but internally
     # we use z,y,x order
     shift = (shift[2], shift[1], shift[0])
@@ -277,7 +277,21 @@ def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_
             print(err)
             return err
         is_ome = True
-    chunk_sizes = izarr.chunks
+    
+    # Check if the input zarr has 4 dimensions (with channel)
+    has_channel = len(izarr.shape) == 4
+    if has_channel:
+        print(f"Detected 4D input zarr with shape {izarr.shape}")
+        print(f"Extracting channel {channel}")
+        if channel >= izarr.shape[0]:
+            err = f"Channel index {channel} is out of bounds for shape {izarr.shape}"
+            print(err)
+            return err
+        # Adjust chunks to remove channel dimension
+        chunk_sizes = izarr.chunks[1:]  # Remove the first (channel) dimension
+    else:
+        chunk_sizes = izarr.chunks
+    
     if chunk_size is not None:
         chunk_sizes = (chunk_size, chunk_size, chunk_size)
     divisor = 1
@@ -319,7 +333,11 @@ def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_
     else:
         czarr = izarr
 
-    ishape = izarr.shape
+    # Adjust shape if input has channel dimension
+    if has_channel:
+        ishape = izarr.shape[1:]  # Remove channel dimension
+    else:
+        ishape = izarr.shape
 
     # i0 and i1 are the min and max of the input zarr
     # before windowing and shifting
@@ -382,7 +400,11 @@ def zarr2zarr(izarrdir, ozarrdir, shift=(0,0,0), slices=(None,None,None), chunk_
                 o1 = [min(cs1[i], chunk_sizes[i]*(1+ci[i])) for i in range(3)]
                 i0 = [o0[i]-shift[i] for i in range(3)]
                 i1 = [o1[i]-shift[i] for i in range(3)]
-                ozarr[o0[0]:o1[0], o0[1]:o1[1], o0[2]:o1[2]] = czarr[i0[0]:i1[0], i0[1]:i1[1], i0[2]:i1[2]] // divisor
+                if has_channel:
+                    # Select the specified channel from 4D array
+                    ozarr[o0[0]:o1[0], o0[1]:o1[1], o0[2]:o1[2]] = czarr[channel, i0[0]:i1[0], i0[1]:i1[1], i0[2]:i1[2]] // divisor
+                else:
+                    ozarr[o0[0]:o1[0], o0[1]:o1[1], o0[2]:o1[2]] = czarr[i0[0]:i1[0], i0[1]:i1[1], i0[2]:i1[2]] // divisor
 
 
 def process_chunk(args):
@@ -511,6 +533,11 @@ def zarr_to_ome_main():
             type=int, 
             default=cpu_count(), 
             help="Advanced: Number of threads to use for processing. Default is number of CPUs")
+    parser.add_argument(
+            "--channel",
+            type=int,
+            default=0,
+            help="Channel index to extract from multi-channel zarr data (0-based indexing)")
     
 
     args = parser.parse_args()
@@ -527,6 +554,7 @@ def zarr_to_ome_main():
     rebuild_higher_levels = args.rebuild
     num_threads = args.num_threads
     algorithm = args.algorithm
+    channel = args.channel
     print("overwrite", overwrite)
 
     shift = (0,0,0)
@@ -579,7 +607,7 @@ def zarr_to_ome_main():
         if nlevels == 1:
             level0dir = ozarrdir
         print("shift", shift, "slices", slices)
-        err = zarr2zarr(izarrdir, level0dir, shift=shift, slices=slices, chunk_size=chunk_size, compression=compression, dtype=dtype)
+        err = zarr2zarr(izarrdir, level0dir, shift=shift, slices=slices, chunk_size=chunk_size, compression=compression, dtype=dtype, channel=channel)
         if err is not None:
             print("error returned:", err)
             return 1
