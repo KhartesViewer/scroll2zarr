@@ -15,6 +15,7 @@ import skimage.transform
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
+from scipy import ndimage
 
 
 def init_o2z_globals():
@@ -195,7 +196,7 @@ def create_ome_dir(zarrdir):
         return err
 
 
-def create_ome_headers(zarrdir, nlevels):
+def create_ome_headers(zarrdir, nlevels, preserve_z=False):
     zattrs_dict = {
         "multiscales": [
             {
@@ -222,9 +223,16 @@ def create_ome_headers(zarrdir, nlevels):
     for l in range(nlevels):
         ds = copy.deepcopy(dataset_dict)
         ds["path"] = "%d" % l
-        scale = 2.0**l
-        ds["coordinateTransformations"][0]["scale"] = [scale] * 3
-        # print(json.dumps(ds, indent=4))
+
+        if preserve_z:
+            xy_scale = 2.0**l
+            z_scale = 1.0
+            ds["coordinateTransformations"][0]["scale"] = [z_scale, xy_scale, xy_scale]
+        else:
+            scale = 2.0**l
+            ds["coordinateTransformations"][0]["scale"] = [scale] * 3
+            # print(json.dumps(ds, indent=4))
+
         datasets.append(ds)
     zad = copy.deepcopy(zattrs_dict)
     zad["multiscales"][0]["datasets"] = datasets
@@ -464,6 +472,107 @@ def process_chunk(args):
     ] = np.round(obuf)
 
 
+def process_chunk_preserve_z(args):
+    (
+        idata,
+        odata,
+        z,
+        y,
+        x,
+        cz,
+        cy,
+        cx,
+        algorithm,
+        xy_factor,
+        apply_smoothing,
+        binary_threshold,
+    ) = args
+
+    iz_start = z * cz
+    iz_end = min((z + 1) * cz, idata.shape[0])
+    iy_start = y * cy * xy_factor
+    iy_end = min((y + 1) * cy * xy_factor, idata.shape[1])
+    ix_start = x * cx * xy_factor
+    ix_end = min((x + 1) * cx * xy_factor, idata.shape[2])
+
+    ibuf = idata[iz_start:iz_end, iy_start:iy_end, ix_start:ix_end]
+
+    if np.max(ibuf) == 0:
+        return
+
+    downsample_factor = int(xy_factor)
+
+    if downsample_factor == 1:
+        obuf = ibuf
+    else:
+        zlen, H, W = ibuf.shape
+        pad_h = (-H) % downsample_factor
+        pad_w = (-W) % downsample_factor
+        if pad_h or pad_w:
+            ibuf = np.pad(ibuf, ((0, 0), (0, pad_h), (0, pad_w)), mode="symmetric")
+            H += pad_h
+            W += pad_w
+
+        Hn = H // downsample_factor
+        Wn = W // downsample_factor
+
+        if apply_smoothing or algorithm == "gaussian":
+            sigma = 0.5 * downsample_factor
+            tmp = ndimage.gaussian_filter(
+                ibuf.astype(np.float32, copy=False),
+                sigma=(0.0, sigma, sigma),
+                mode="reflect",
+            )
+            obuf = tmp[:, ::downsample_factor, ::downsample_factor]
+
+            if apply_smoothing and binary_threshold is not None:
+                if 0.0 <= float(binary_threshold) <= 1.0 and np.issubdtype(
+                    idata.dtype, np.integer
+                ):
+                    thr_val = float(binary_threshold) * np.iinfo(idata.dtype).max
+                else:
+                    thr_val = float(binary_threshold)
+
+                mask = obuf > thr_val
+                out_hi = (
+                    np.iinfo(odata.dtype).max
+                    if np.issubdtype(odata.dtype, np.integer)
+                    else 1.0
+                )
+                obuf = np.where(mask, out_hi, 0).astype(odata.dtype, copy=False)
+            else:
+                obuf = obuf.astype(odata.dtype, copy=False)
+        elif algorithm == "nearest":
+            obuf = ibuf[:, ::downsample_factor, ::downsample_factor]
+        elif algorithm == "mean":
+            obuf = skimage.transform.downscale_local_mean(
+                ibuf, (1, downsample_factor, downsample_factor)
+            )
+        elif algorithm == "max":
+            obuf = ibuf.reshape(zlen, Hn, downsample_factor, Wn, downsample_factor).max(
+                axis=(2, 4)
+            )
+        else:
+            raise ValueError(f"algorithm {algorithm} not valid")
+
+    oz_start = z * cz
+    oy_start = y * cy
+    ox_start = x * cx
+
+    oz_end = min(oz_start + obuf.shape[0], odata.shape[0])
+    oy_end = min(oy_start + obuf.shape[1], odata.shape[1])
+    ox_end = min(ox_start + obuf.shape[2], odata.shape[2])
+
+    oview = obuf[: oz_end - oz_start, : oy_end - oy_start, : ox_end - ox_start]
+
+    if np.issubdtype(odata.dtype, np.integer) and oview.dtype.kind == "f":
+        oview = np.rint(oview).astype(odata.dtype, copy=False)
+    else:
+        oview = oview.astype(odata.dtype, copy=False)
+
+    odata[oz_start:oz_end, oy_start:oy_end, ox_start:ox_end] = oview
+
+
 def resize(zarrdir, old_level, num_threads, algorithm="mean"):
     idir = zarrdir / ("%d" % old_level)
     if not idir.exists():
@@ -507,6 +616,80 @@ def resize(zarrdir, old_level, num_threads, algorithm="mean"):
     # Use ThreadPoolExecutor to process blocks in parallel
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         list(tqdm(executor.map(process_chunk, tasks), total=len(tasks)))
+
+    print("Processing complete")
+
+
+def resize_preserve_z(
+    zarrdir,
+    old_level,
+    num_threads,
+    algorithm="mean",
+    enable_level_smoothing=False,
+    smooth_start_level=4,
+    binary_threshold=None,
+):
+    idir = zarrdir / ("%d" % old_level)
+    if not idir.exists():
+        err = f"input directory {idir} does not exist"
+        print(err)
+        return err
+
+    odir = zarrdir / ("%d" % (old_level + 1))
+    idata = zarr.open(idir, mode="r")
+
+    xy_factor = 2
+    apply_smoothing = enable_level_smoothing and (old_level + 1) >= smooth_start_level
+
+    print(
+        "Creating level",
+        old_level + 1,
+        "  input array shape",
+        idata.shape,
+        " algorithm",
+        algorithm,
+        " Z preserved, XY factor",
+        xy_factor,
+        " smoothing",
+        apply_smoothing,
+    )
+
+    cz, cy, cx = idata.chunks
+    sz, sy, sx = idata.shape
+    store = zarr.NestedDirectoryStore(odir)
+    odata = zarr.open(
+        store=store,
+        shape=(sz, divp1(sy, xy_factor), divp1(sx, xy_factor)),
+        chunks=idata.chunks,
+        dtype=idata.dtype,
+        write_empty_chunks=False,
+        fill_value=0,
+        compressor=idata.compressor,
+        mode="w",
+    )
+
+    tasks = [
+        (
+            idata,
+            odata,
+            z,
+            y,
+            x,
+            cz,
+            cy,
+            cx,
+            algorithm,
+            xy_factor,
+            apply_smoothing,
+            binary_threshold,
+        )
+        for z in range(divp1(sz, cz))
+        for y in range(divp1(divp1(sy, xy_factor), cy))
+        for x in range(divp1(divp1(sx, xy_factor), cx))
+    ]
+
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        list(tqdm(executor.map(process_chunk_preserve_z, tasks), total=len(tasks)))
 
     print("Processing complete")
 
@@ -582,6 +765,33 @@ def zarr_to_ome_main():
         default=0,
         help="Channel index to extract from multi-channel zarr data (0-based indexing)",
     )
+    parser.add_argument(
+        "--preserve_z",
+        action="store_true",
+        help="Use Z-preserving scaling (preserve Z resolution)",
+    )
+    parser.add_argument(
+        "--enable_level_smoothing",
+        action="store_true",
+        help="Enable Gaussian smoothing for higher levels",
+    )
+    parser.add_argument(
+        "--smooth_start_level",
+        type=int,
+        default=4,
+        help="Level to start applying smoothing",
+    )
+    parser.add_argument(
+        "--binary_threshold",
+        type=float,
+        default=0.5,
+        help="Threshold for binary conversion after smoothing",
+    )
+    parser.add_argument(
+        "--keep_continuous",
+        action="store_true",
+        help="Keep smoothed values continuous instead of binary",
+    )
 
     args = parser.parse_args()
 
@@ -598,6 +808,15 @@ def zarr_to_ome_main():
     num_threads = args.num_threads
     algorithm = args.algorithm
     channel = args.channel
+    preserve_z = args.preserve_z
+    enable_level_smoothing = args.enable_level_smoothing
+    smooth_start_level = args.smooth_start_level
+
+    if args.keep_continuous:
+        binary_threshold = None
+    else:
+        binary_threshold = args.binary_threshold
+
     print("overwrite", overwrite)
 
     shift = (0, 0, 0)
@@ -639,7 +858,7 @@ def zarr_to_ome_main():
             return 1
 
         if nlevels > 1:
-            err = create_ome_headers(ozarrdir, nlevels)
+            err = create_ome_headers(ozarrdir, nlevels, preserve_z)
             if err is not None:
                 print("error returned:", err)
                 return 1
@@ -665,7 +884,7 @@ def zarr_to_ome_main():
     else:
         if nlevels <= 1:
             return 0
-        err = create_ome_headers(ozarrdir, nlevels)
+        err = create_ome_headers(ozarrdir, nlevels, preserve_z)
         if err is not None:
             print("error returned:", err)
             return 1
@@ -673,7 +892,18 @@ def zarr_to_ome_main():
     # for each level (1 and beyond):
     existing_level = 0
     for l in range(existing_level, nlevels - 1):
-        err = resize(ozarrdir, l, num_threads, algorithm)
+        if preserve_z:
+            err = resize_preserve_z(
+                ozarrdir,
+                l,
+                num_threads,
+                algorithm,
+                enable_level_smoothing,
+                smooth_start_level,
+                binary_threshold,
+            )
+        else:
+            err = resize(ozarrdir, l, num_threads, algorithm)
         if err is not None:
             print("error returned:", err)
             return 1
