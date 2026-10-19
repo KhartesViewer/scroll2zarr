@@ -1,0 +1,19 @@
+# Excerpt from a previously saved run. Not a new execution.
+# Local isolated-run directory prefixes replaced. Warnings and results retained.
+# Original SHA256 2818d078cc33e906113e244ef4fb04734a3ac77b3a5e9911906f4eb02b70efa2
+
+[isolated-run]/scroll_to_ome.py:17: SyntaxWarning: invalid escape sequence '\V'
+  # tiffdir = Path(r"C:\Vesuvius\scroll 1 2000-2030")
+[isolated-run]/scroll_to_ome.py:17: SyntaxWarning: invalid escape sequence '\V'
+  # tiffdir = Path(r"C:\Vesuvius\scroll 1 2000-2030")
+test_final_block_values (test_scroll_to_ome_final_block.Tifs2ZarrTests.test_final_block_values) ... [isolated-run]/scroll_to_ome.py:244: FutureWarning: The NestedDirectoryStore is deprecated and will be removed in a Zarr-Python version 3, see https://github.com/zarr-developers/zarr-python/issues/1274 for more information.
+  store = zarr.NestedDirectoryStore(zarrdir)
+ok
+test_spatial_crop_values (test_scroll_to_ome_spatial_crops.Tifs2ZarrTests.test_spatial_crop_values) ... [isolated-run]/scroll_to_ome.py:244: FutureWarning: The NestedDirectoryStore is deprecated and will be removed in a Zarr-Python version 3, see https://github.com/zarr-developers/zarr-python/issues/1274 for more information.
+  store = zarr.NestedDirectoryStore(zarrdir)
+ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.059s
+
+OK
