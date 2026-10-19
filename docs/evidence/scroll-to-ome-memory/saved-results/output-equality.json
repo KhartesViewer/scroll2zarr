@@ -1,0 +1,21 @@
+{
+  "kind": "Static readback of the saved checker receipt. Not a new execution.",
+  "checker_receipt_sha256": "5930e352f13fe8b29ec8247b87c4a3642d37648feddd502e3dd76b511adaa69e",
+  "checker_receipt_bytes": 1673511,
+  "checker_status": "CHECKED_ALL_COORDINATES",
+  "coordinates_checked_per_arm": 134217728,
+  "fixture_valid": true,
+  "files_sealed_per_arm": {
+    "a1": 4097,
+    "a2": 4097,
+    "a3": 4097,
+    "a4": 4097
+  },
+  "canonical_seal_map_sha256_per_arm": {
+    "a1": "8bb6cc06adbad0df82569e53127b5e49bfdd44bcd3702181891c8a524916a9ae",
+    "a2": "8bb6cc06adbad0df82569e53127b5e49bfdd44bcd3702181891c8a524916a9ae",
+    "a3": "8bb6cc06adbad0df82569e53127b5e49bfdd44bcd3702181891c8a524916a9ae",
+    "a4": "8bb6cc06adbad0df82569e53127b5e49bfdd44bcd3702181891c8a524916a9ae"
+  },
+  "all_four_seal_maps_identical": true
+}

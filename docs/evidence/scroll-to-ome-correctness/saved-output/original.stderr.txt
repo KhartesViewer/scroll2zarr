@@ -1,0 +1,120 @@
+# Excerpt from a previously saved run. Not a new execution.
+# Local isolated-run directory prefixes replaced. Warnings and results retained.
+# Original SHA256 00b060e1c2e192a62e5cc3722f99cabb232fb1d0d1b74956c17062e28b45177f
+
+[isolated-run]/scroll_to_ome.py:17: SyntaxWarning: invalid escape sequence '\V'
+  # tiffdir = Path(r"C:\Vesuvius\scroll 1 2000-2030")
+[isolated-run]/scroll_to_ome.py:17: SyntaxWarning: invalid escape sequence '\V'
+  # tiffdir = Path(r"C:\Vesuvius\scroll 1 2000-2030")
+test_final_block_values (test_scroll_to_ome_final_block.Tifs2ZarrTests.test_final_block_values) ... [isolated-run]/scroll_to_ome.py:244: FutureWarning: The NestedDirectoryStore is deprecated and will be removed in a Zarr-Python version 3, see https://github.com/zarr-developers/zarr-python/issues/1274 for more information.
+  store = zarr.NestedDirectoryStore(zarrdir)
+
+  test_final_block_values (test_scroll_to_ome_final_block.Tifs2ZarrTests.test_final_block_values) (case='uint16_to_uint8_full') ... FAIL
+  test_final_block_values (test_scroll_to_ome_final_block.Tifs2ZarrTests.test_final_block_values) (case='uint16_to_uint8_partial') ... FAIL
+test_spatial_crop_values (test_scroll_to_ome_spatial_crops.Tifs2ZarrTests.test_spatial_crop_values) ... [isolated-run]/scroll_to_ome.py:244: FutureWarning: The NestedDirectoryStore is deprecated and will be removed in a Zarr-Python version 3, see https://github.com/zarr-developers/zarr-python/issues/1274 for more information.
+  store = zarr.NestedDirectoryStore(zarrdir)
+
+  test_spatial_crop_values (test_scroll_to_ome_spatial_crops.Tifs2ZarrTests.test_spatial_crop_values) (case='uint16_y_only_partial') ... FAIL
+  test_spatial_crop_values (test_scroll_to_ome_spatial_crops.Tifs2ZarrTests.test_spatial_crop_values) (case='uint16_x_only_partial') ... ERROR
+
+======================================================================
+ERROR: test_spatial_crop_values (test_scroll_to_ome_spatial_crops.Tifs2ZarrTests.test_spatial_crop_values) (case='uint16_x_only_partial')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "[isolated-run]/tests/test_scroll_to_ome_spatial_crops.py", line 61, in test_spatial_crop_values
+    result = scroll_to_ome.tifs2zarr(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "[isolated-run]/scroll_to_ome.py", line 307, in tifs2zarr
+    buf[cur_bufz,:ye-ys,:] = tarr[ys:ye,:] // divisor
+    ~~~^^^^^^^^^^^^^^^^^^^
+ValueError: could not broadcast input array from shape (4,3) into shape (4,2)
+
+======================================================================
+FAIL: test_final_block_values (test_scroll_to_ome_final_block.Tifs2ZarrTests.test_final_block_values) (case='uint16_to_uint8_full')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "[isolated-run]/tests/test_scroll_to_ome_final_block.py", line 52, in test_final_block_values
+    np.testing.assert_array_equal(reopened[:], [expected] * planes)
+  File "[isolated-run]/venv/lib/python3.12/site-packages/numpy/testing/_private/utils.py", line 1128, in assert_array_equal
+    assert_array_compare(operator.__eq__, actual, desired, err_msg=err_msg,
+  File "[isolated-run]/venv/lib/python3.12/site-packages/numpy/testing/_private/utils.py", line 988, in assert_array_compare
+    raise AssertionError(msg)
+AssertionError: 
+Arrays are not equal
+
+Mismatched elements: 6 / 8 (75%)
+First 5 mismatches are at indices:
+ [0, 0, 1]: 0 (ACTUAL), 1 (DESIRED)
+ [0, 1, 0]: 0 (ACTUAL), 255 (DESIRED)
+ [0, 1, 1]: 0 (ACTUAL), 255 (DESIRED)
+ [1, 0, 1]: 0 (ACTUAL), 1 (DESIRED)
+ [1, 1, 0]: 0 (ACTUAL), 255 (DESIRED)
+Max absolute difference among violations: 255
+Max relative difference among violations: 1.
+ ACTUAL: array([[[0, 0],
+        [0, 0]],
+...
+ DESIRED: array([[[  0,   1],
+        [255, 255]],
+...
+
+======================================================================
+FAIL: test_final_block_values (test_scroll_to_ome_final_block.Tifs2ZarrTests.test_final_block_values) (case='uint16_to_uint8_partial')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "[isolated-run]/tests/test_scroll_to_ome_final_block.py", line 52, in test_final_block_values
+    np.testing.assert_array_equal(reopened[:], [expected] * planes)
+  File "[isolated-run]/venv/lib/python3.12/site-packages/numpy/testing/_private/utils.py", line 1128, in assert_array_equal
+    assert_array_compare(operator.__eq__, actual, desired, err_msg=err_msg,
+  File "[isolated-run]/venv/lib/python3.12/site-packages/numpy/testing/_private/utils.py", line 988, in assert_array_compare
+    raise AssertionError(msg)
+AssertionError: 
+Arrays are not equal
+
+Mismatched elements: 3 / 12 (25%)
+Mismatch at indices:
+ [2, 0, 1]: 0 (ACTUAL), 1 (DESIRED)
+ [2, 1, 0]: 0 (ACTUAL), 255 (DESIRED)
+ [2, 1, 1]: 0 (ACTUAL), 255 (DESIRED)
+Max absolute difference among violations: 255
+Max relative difference among violations: 1.
+ ACTUAL: array([[[  0,   1],
+        [255, 255]],
+...
+ DESIRED: array([[[  0,   1],
+        [255, 255]],
+...
+
+======================================================================
+FAIL: test_spatial_crop_values (test_scroll_to_ome_spatial_crops.Tifs2ZarrTests.test_spatial_crop_values) (case='uint16_y_only_partial')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "[isolated-run]/tests/test_scroll_to_ome_spatial_crops.py", line 69, in test_spatial_crop_values
+    np.testing.assert_array_equal(reopened[:], expected)
+  File "[isolated-run]/venv/lib/python3.12/site-packages/numpy/testing/_private/utils.py", line 1128, in assert_array_equal
+    assert_array_compare(operator.__eq__, actual, desired, err_msg=err_msg,
+  File "[isolated-run]/venv/lib/python3.12/site-packages/numpy/testing/_private/utils.py", line 988, in assert_array_compare
+    raise AssertionError(msg)
+AssertionError: 
+Arrays are not equal
+
+Mismatched elements: 18 / 18 (100%)
+First 5 mismatches are at indices:
+ [0, 0, 0]: 40 (ACTUAL), 50 (DESIRED)
+ [0, 0, 1]: 41 (ACTUAL), 51 (DESIRED)
+ [0, 0, 2]: 42 (ACTUAL), 52 (DESIRED)
+ [0, 1, 0]: 50 (ACTUAL), 60 (DESIRED)
+ [0, 1, 1]: 51 (ACTUAL), 61 (DESIRED)
+Max absolute difference among violations: 10
+Max relative difference among violations: 0.2
+ ACTUAL: array([[[ 40,  41,  42],
+        [ 50,  51,  52]],
+...
+ DESIRED: array([[[ 50,  51,  52],
+        [ 60,  61,  62]],
+...
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.079s
+
+FAILED (failures=3, errors=1)

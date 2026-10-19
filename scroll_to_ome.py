@@ -256,14 +256,14 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, obytes=0, slices=None, maxgb=None):
     # nb of chunks in y direction that fit inside of max_gb
     chy = cy // chunk_size + 1
     if maxgb is not None:
-        maxy = int((maxgb*10**9)/(cx*chunk_size*dt0.itemsize))
+        maxy = int((maxgb*10**9)/(cx*chunk_size*np.dtype(otype).itemsize))
         chy = maxy // chunk_size
         chy = max(1, chy)
 
     # nb of y chunk groups
     ncgy = cy // (chunk_size*chy) + 1
     print("chy, ncgy", chy, ncgy)
-    buf = np.zeros((chunk_size, min(cy, chy*chunk_size), cx), dtype=dt0)
+    buf = np.zeros((chunk_size, min(cy, chy*chunk_size), cx), dtype=otype)
     for icy in range(ncgy):
         ys = icy*chy*chunk_size
         ye = ys+chy*chunk_size
@@ -288,8 +288,10 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, obytes=0, slices=None, maxgb=None):
             if nx != nx0 or ny != ny0:
                 print("\nFile %s is the wrong shape (%d, %d); expected %d, %d"%(tiffname,nx,ny,nx0,ny0))
                 continue
-            if xslice is not None and yslice is not None:
-                tarr = tarr[yslice, xslice]
+            if yslice is not None:
+                tarr = tarr[yslice, :]
+            if xslice is not None:
+                tarr = tarr[:, xslice]
             cur_zc = z // chunk_size
             if cur_zc != prev_zc:
                 if prev_zc >= 0:
@@ -317,7 +319,7 @@ def tifs2zarr(tiffdir, zarrdir, chunk_size, obytes=0, slices=None, maxgb=None):
                     print("\nwriting, z range %d,%d  y range %d,%d"%(zs+z0, ze+z0, ys+y0, ye+y0))
                 # print("\nwriting (end)", zs, ze)
                 # tzarr[zs:zs+bufnz,:,:] = buf[0:(1+cur_bufz)]
-                tzarr[zs:ze,ys:ye,:] = buf[:ze-zs,:ye-ys,:] // divisor
+                tzarr[zs:ze,ys:ye,:] = buf[:ze-zs,:ye-ys,:]
             else:
                 print("\n(end)")
         buf[:,:,:] = 0

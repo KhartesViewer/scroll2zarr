@@ -1,0 +1,164 @@
+{
+  "schema": "tiff-memory-assay-source-r735-v1",
+  "status": "SOURCE_PROPOSAL_UNEXECUTED",
+  "numerical_owner": "NONE",
+  "arms": [
+    {
+      "id": "a1",
+      "role": "reference_fixed"
+    },
+    {
+      "id": "a2",
+      "role": "candidate"
+    },
+    {
+      "id": "a3",
+      "role": "candidate"
+    },
+    {
+      "id": "a4",
+      "role": "reference_fixed"
+    }
+  ],
+  "fixture": {
+    "names": [
+      "00.tif",
+      "01.tif",
+      "02.tif",
+      "03.tif",
+      "04.tif",
+      "05.tif",
+      "06.tif",
+      "07.tif",
+      "08.tif",
+      "09.tif",
+      "10.tif",
+      "11.tif",
+      "12.tif",
+      "13.tif",
+      "14.tif",
+      "15.tif",
+      "16.tif",
+      "17.tif",
+      "18.tif",
+      "19.tif",
+      "20.tif",
+      "21.tif",
+      "22.tif",
+      "23.tif",
+      "24.tif",
+      "25.tif",
+      "26.tif",
+      "27.tif",
+      "28.tif",
+      "29.tif",
+      "30.tif",
+      "31.tif"
+    ],
+    "shape": [
+      32,
+      2048,
+      2048
+    ],
+    "dtype": "<u2",
+    "rowsperstrip": 64,
+    "compression": null,
+    "photometric": "minisblack",
+    "formula": "(257*z+17*y+31*x)%65536"
+  },
+  "arguments": {
+    "chunk_size": 32,
+    "obytes": 1,
+    "slices": null,
+    "maxgb": null
+  },
+  "thresholds": {
+    "absolute_bytes": 100663296,
+    "ratio_numerator": 3,
+    "ratio_denominator": 4,
+    "require_both_metrics": true
+  },
+  "prospective_limits": {
+    "cpu": 1,
+    "memory_bytes": 2147483648,
+    "swap_bytes": 0,
+    "tasks": 64,
+    "arm_seconds": 120,
+    "work_seconds": 690,
+    "family_seconds": 720,
+    "bulk_bytes": 2147483648,
+    "log_bytes": 1048576,
+    "metadata_bytes": 4194304,
+    "admitted": false,
+    "output_entries": 20000,
+    "file_bytes": 12582912
+  },
+  "snapshots": {
+    "producer": {
+      "relative": "originals/774521065d78b52e4660b6efc139a25bfebac036763de226f349a8922becee0a/producer.py",
+      "bytes": 11793,
+      "sha256": "774521065d78b52e4660b6efc139a25bfebac036763de226f349a8922becee0a"
+    },
+    "protocol": {
+      "relative": "originals/5d2b7a086e0f10ac94fef279bce31753907f5745612851f2a644df78954f550a/protocol.json",
+      "bytes": 4916,
+      "sha256": "5d2b7a086e0f10ac94fef279bce31753907f5745612851f2a644df78954f550a"
+    },
+    "reference_fixed": {
+      "relative": "originals/27b5409b14fbcee38ee6dfc6d3757b3ae15c0342c14e9c1e0124fcf58d4286df/scroll_to_ome.py",
+      "bytes": 17175,
+      "sha256": "27b5409b14fbcee38ee6dfc6d3757b3ae15c0342c14e9c1e0124fcf58d4286df"
+    },
+    "candidate": {
+      "relative": "originals/2807267f37a658993cf1eb531f466ef34845f159d3649732e50e917bdd4d4589/scroll_to_ome.py",
+      "bytes": 17189,
+      "sha256": "2807267f37a658993cf1eb531f466ef34845f159d3649732e50e917bdd4d4589"
+    }
+  },
+  "expected": {
+    "zarr_version": "2.18.7"
+  },
+  "sources": {
+    "reference_fixed": {
+      "bytes": 17175,
+      "sha256": "27b5409b14fbcee38ee6dfc6d3757b3ae15c0342c14e9c1e0124fcf58d4286df",
+      "functions": [
+        {
+          "name": "tifs2zarr",
+          "start": 156,
+          "end": 323,
+          "source_sha256": "bb8d053c275f8fe9e274b3f406be40eb1350796f4788ea7f45c67f34f71603c9",
+          "ast_sha256": "3418e5ed5512c9e8c8035a016a2c58fe661fdd653b12d22e303a606c228de95f"
+        }
+      ]
+    },
+    "candidate": {
+      "bytes": 17189,
+      "sha256": "2807267f37a658993cf1eb531f466ef34845f159d3649732e50e917bdd4d4589",
+      "functions": [
+        {
+          "name": "tifs2zarr",
+          "start": 156,
+          "end": 323,
+          "source_sha256": "d97fa1e6723035c4dc436faa9d866763a77f39709ba43eb44ce7aea6476fdda2",
+          "ast_sha256": "ffd28f4b6ae7123d88629bd2a99a8e9a11829cc4eaffc86c0a09ed717d92c64a"
+        }
+      ]
+    }
+  },
+  "thread_env": {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "BLIS_NUM_THREADS": "1",
+    "BLOSC_NTHREADS": "1"
+  },
+  "memory_docs": [
+    "https://man7.org/linux/man-pages/man2/getrusage.2.html",
+    "https://man7.org/linux/man-pages/man2/wait4.2.html",
+    "https://man7.org/linux/man-pages/man5/proc_pid_status.5.html"
+  ],
+  "cache_preparation": "Supervisor streams the full frozen TIFF cohort before every arm, outside measurement. No timing claim."
+}

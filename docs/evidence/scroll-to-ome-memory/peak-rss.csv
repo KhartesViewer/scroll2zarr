@@ -1,0 +1,5 @@
+arm,role,vmhwm_bytes,wait4_peak_bytes
+a1,reference_fixed,379719680,379719680
+a2,candidate,245530624,245530624
+a3,candidate,245506048,245506048
+a4,reference_fixed,379797504,379797504
